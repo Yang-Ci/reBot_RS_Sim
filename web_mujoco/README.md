@@ -79,12 +79,12 @@ npm run test:vision:return
 这些都是已标定杯勺族的几何拟合，尚不支持任意尺寸、透明杯或多个同类目标。
 首次运行时 Linux 可执行 `npx playwright install --with-deps chromium`；Windows 默认使用本机 Chrome。
 浏览器测试默认强制 SwiftShader，明确记录软件 GPU；在本机命令后追加 `--hardware` 可使用浏览器选择的实际 GPU。
-GitHub Actions 在构建前执行 `test:ci`、`test:loading`、`test:contact`、标准 / 扩展 / 归位视觉测试和 `test:visual-ui` 并上传回归报告，检查失败会阻止该次部署；
+GitHub Actions 在构建前执行 `test:ci`、`test:loading`、`test:contact`、标准 / 扩展 / 归位视觉测试、`test:visual-ui` 和 `test:camera` 并上传回归报告，检查失败会阻止该次部署；
 拉取请求也执行检查，部署仅在主分支推送或手动触发时执行。是否将检查设为合并门槛由仓库分支保护配置决定。
 
 两只机械臂共享网格与材质资源，只有 body、关节和作动器使用左右前缀。
 主视角和三路相机共用一个 WebGL 上下文；每路预览以最高 10 帧/秒独立轮流刷新，静止和缩放时也保持更新。慢 GPU 只保留一次在途取图，避免积压；等待取图不会阻止主视角重绘，静止主画面复用上一帧。
-滚轮和触控缩放通过相机 `change` 事件触发重绘。运行 `npm run test:camera` 可检查单次及连续缩放、三路画面的实际绘制，以及延迟取图后的响应与恢复。`window.rebotDual.renderMetrics().previews` 提供每路已绘制帧数和距上次更新的时间。
+滚轮和触控缩放通过相机 `change` 事件触发重绘。运行 `npm run test:camera` 可检查单次及连续缩放、三路画面的实际绘制，以及延迟取图后的响应与恢复。该检查默认使用 SwiftShader，并仅将主画面的像素比例设为 0.5，保留页面布局和相机采样分辨率；在有限超时内等待实际帧更新。在本机可运行 `npm run test:camera -- --hardware` 检查实际 GPU。`window.rebotDual.renderMetrics().previews` 提供每路已绘制帧数和距上次更新的时间。
 RGB-D 观测按请求重新采样，像素通过 WebGL2 异步读回，图像处理在 Web Worker 中执行。
 相机采样串行排队，等待时不继续堆积绘制；绘制提交和首次着色器编译仍在主线程，软件 GPU 上画面更新可能明显延迟。
 双臂家居场景按每个相机的投影误差选择机械臂连杆 / 底座显示精度，超过 0.8 px 时恢复原网格；

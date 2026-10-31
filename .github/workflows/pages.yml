@@ -37,6 +37,9 @@ jobs:
       - name: Verify actual dual-arm interface
         working-directory: web_mujoco
         run: npm run test:visual-ui
+      - name: Verify camera interaction and live previews
+        working-directory: web_mujoco
+        run: npm run test:camera
       - name: Verify timing, grasping and randomized cooperation
         working-directory: web_mujoco
         run: npm run test:ci

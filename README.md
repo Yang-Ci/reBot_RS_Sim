@@ -45,7 +45,9 @@ Switch configurations at the top of the page. In AGV mode, drive with WASD / arr
 
 The dual-arm tabletop runs preset sorting tasks with MuJoCo contact physics: the left arm places an egg and a spool in the tray while the right arm places an apple and a lime in the basket. Select all objects or a single item, pause/resume, reset, adjust speed, and switch camera views. Natural-language control is not connected; the dedicated tabletop UI currently uses Chinese.
 
-The default cup-and-spoon collaboration has the left arm hold the cup while the right arm grips the spoon handle, inserts the bowl and releases it, before the left arm sets the cup down. This preset uses pose IK and releasable assisted grasp constraints; sorting retains contact-based grasping. The room includes cabinets, shelves, curtains, chairs and kitchen accessories, with detailed hollow cup/handle and spoon geometry. The task card can collapse while preserving status and progress, and cameras include a room view and a collaboration close-up.
+The default cup-and-spoon collaboration has the left arm hold the cup while the right arm grips the spoon handle, inserts the bowl and releases it, before the left arm sets the cup down. This preset and the present-and-return task use RGB-D visual feedback, pose IK and contact-based grasping, with grasp weld constraints disabled. Sorting also uses contact-based grasping. The room includes cabinets, shelves, curtains, chairs and kitchen accessories, with detailed hollow cup/handle and spoon geometry. The task card can collapse while preserving status and progress, and cameras include a room view and a collaboration close-up.
+
+The coffee-and-feeding demo has the left arm collect and hold a cup of coffee while the right arm stirs and brings the spoon to the seated person's mouth. This task uses releasable assisted grasp constraints and is labeled as an assisted-grasp demo. Coffee is visualized without fluid dynamics.
 
 Campus mode adds charging / delivery navigation shortcuts and a follow camera. These bays demonstrate navigation and docking; charging state and delivery jobs are not simulated. The detailed campus is rendered in the browser; native MuJoCo uses simplified building proxies, and ROS / Nav2 campus maps are not configured.
 
@@ -187,6 +189,10 @@ Run web checks in `web_mujoco/`; ROS is not required:
 npm run smoke
 npm run test:loading
 npm run test:reset
+npm run test:dual
+npm run test:cooperation
+npm run test:coffee
+npm run test:camera
 npm run test:variants
 npm run test:campus
 npm run test:explode

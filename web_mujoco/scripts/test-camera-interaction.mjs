@@ -9,12 +9,16 @@ await server?.listen();
 const url=externalUrl||'http://127.0.0.1:5196/?variant=dual';
 const label=process.argv.find(arg=>arg.startsWith('--label='))?.slice(8)||'current';
 const baseline=process.argv.includes('--baseline');
+const softwareRendering=!process.argv.includes('--hardware');
+// Match the visual UI check: reduce only main-canvas pixels on CPU-only CI.
+const deviceScaleFactor=softwareRendering ? .5 : 1;
+const previewTimeout=softwareRendering?30000:10000;
 const browser=await chromium.launch({channel:process.env.PLAYWRIGHT_CHANNEL||(process.platform==='win32'?'chrome':undefined),headless:true,
-  args:['--enable-webgl','--ignore-gpu-blocklist']});
-const errors=[],report={url,label};
+  args:[...(softwareRendering?['--use-angle=swiftshader']:[]),'--enable-webgl','--ignore-gpu-blocklist']});
+const errors=[],report={url,label,environment:{softwareRendering,deviceScaleFactor,previewTimeout}};
 await mkdir('.reports',{recursive:true});
 try {
-  const page=await browser.newPage({viewport:{width:1100,height:850},serviceWorkers:'block'});
+  const page=await browser.newPage({viewport:{width:1100,height:850},deviceScaleFactor,serviceWorkers:'block'});
   await page.addInitScript(()=>{
     window.__previewPaints={};
     const wait=WebGL2RenderingContext.prototype.clientWaitSync;
@@ -40,13 +44,19 @@ try {
   await page.waitForTimeout(2000);
   const paints=()=>page.evaluate(()=>structuredClone(window.__previewPaints));
   const paintDelta=(before,after)=>Object.fromEntries(Object.keys(before).map(id=>[id,after[id].frames-before[id].frames]));
+  const waitForPaints=before=>page.waitForFunction(before=>Object.keys(before).every(id=>
+    window.__previewPaints[id]?.frames>before[id].frames),before,{timeout:previewTimeout});
+  const waitForDraw=before=>page.waitForFunction(draws=>window.rebotDual.renderMetrics().mainDraws>draws,
+    before.mainDraws,{timeout:previewTimeout});
   const idlePaintsBefore=await paints();await page.waitForTimeout(600);
+  if(!baseline)await waitForPaints(idlePaintsBefore);
   report.idlePreviews=paintDelta(idlePaintsBefore,await paints());
   if(!baseline)assert(Object.values(report.idlePreviews).every(count=>count>0),'all three preview canvases must keep painting while the scene is idle');
   await page.mouse.move(100,470);
   const snapshot=()=>page.evaluate(()=>window.rebotDual.renderMetrics());
   report.before=await snapshot();
   await page.mouse.wheel(0,-120);await page.waitForTimeout(300);
+  if(!baseline)await waitForDraw(report.before);
   report.singleWheel=await snapshot();
   report.singleWheelDraws=report.singleWheel.mainDraws-report.before.mainDraws;
   assert(report.singleWheel.camera.distance<report.before.camera.distance,'wheel must move the camera');
@@ -55,6 +65,7 @@ try {
   const samples=[];
   for(const delta of [-80,-80,-80,80,80,80,80,-80]) {
     const before=await snapshot();await page.mouse.wheel(0,delta);await page.waitForTimeout(160);
+    if(!baseline)await waitForDraw(before);
     const after=await snapshot();samples.push({delta,draws:after.mainDraws-before.mainDraws,distance:after.camera.distance,mainMs:after.mainMs});
     assert.deepEqual(after.camera.target,report.before.camera.target);
     if(!baseline)assert(after.mainDraws>before.mainDraws,'each wheel tick must produce a visible frame');
@@ -73,7 +84,10 @@ try {
     }
     requestAnimationFrame(tick);
   }));
-  for(let i=0;i<24;i++) {await page.mouse.wheel(0,i<12?-40:40);await page.waitForTimeout(20);}
+  for(let i=0;i<24;i++) {
+    const before=await snapshot();await page.mouse.wheel(0,i<12?-40:40);await page.waitForTimeout(20);
+    if(!baseline&&softwareRendering)await waitForDraw(before);
+  }
   report.burstEnd=await snapshot();
   const burstPaintsEnd=await paints();
   await page.evaluate(()=>{window.__cameraProbeActive=false;});
@@ -89,16 +103,17 @@ try {
   if(!baseline)assert(report.idleDraws<=1,'camera updates must stop when interaction settles');
   if(!baseline) {
     await page.evaluate(()=>{window.__holdCameraReadback=true;});
-    await page.waitForFunction(()=>window.rebotDual.renderMetrics().sensor.pendingCaptures>0);
+    await page.waitForFunction(()=>window.rebotDual.renderMetrics().sensor.pendingCaptures>0,null,{timeout:previewTimeout});
     const waitingBefore=await snapshot();
     for(let i=0;i<6;i++){await page.mouse.wheel(0,i<3?-40:40);await page.waitForTimeout(25);}
+    await waitForDraw(waitingBefore);
     const waitingAfter=await snapshot();
     assert(waitingAfter.mainDraws>waitingBefore.mainDraws,'pending camera readback must not freeze the main viewport');
     assert(waitingAfter.sensor.pendingCaptures>0);
     const framesBefore=waitingAfter.previews;
     await page.evaluate(()=>{window.__holdCameraReadback=false;});
     await page.waitForFunction(framesBefore=>['overhead','left-wrist','right-wrist'].every(key=>
-      window.rebotDual.renderMetrics().previews[key].frames>framesBefore[key].frames),framesBefore,{timeout:10000});
+      window.rebotDual.renderMetrics().previews[key].frames>framesBefore[key].frames),framesBefore,{timeout:previewTimeout});
     report.delayedReadback={mainDraws:waitingAfter.mainDraws-waitingBefore.mainDraws,recovered:await snapshot()};
   }
   assert(!report.after.previewError);assert.deepEqual(errors,[]);
