@@ -12,7 +12,8 @@ const baseline=process.argv.includes('--baseline');
 const softwareRendering=!process.argv.includes('--hardware');
 // Match the visual UI check: reduce only main-canvas pixels on CPU-only CI.
 const deviceScaleFactor=softwareRendering ? .5 : 1;
-const previewTimeout=softwareRendering?30000:10000;
+// Three serialized captures can each take many seconds on a software GPU.
+const previewTimeout=softwareRendering?180000:10000;
 const browser=await chromium.launch({channel:process.env.PLAYWRIGHT_CHANNEL||(process.platform==='win32'?'chrome':undefined),headless:true,
   args:[...(softwareRendering?['--use-angle=swiftshader']:[]),'--enable-webgl','--ignore-gpu-blocklist']});
 const errors=[],report={url,label,environment:{softwareRendering,deviceScaleFactor,previewTimeout}};
@@ -49,7 +50,13 @@ try {
   const waitForDraw=before=>page.waitForFunction(draws=>window.rebotDual.renderMetrics().mainDraws>draws,
     before.mainDraws,{timeout:previewTimeout});
   const idlePaintsBefore=await paints();await page.waitForTimeout(600);
-  if(!baseline)await waitForPaints(idlePaintsBefore);
+  if(!baseline) {
+    try {await waitForPaints(idlePaintsBefore);}
+    catch(error) {
+      report.idlePreviewTimeout={before:idlePaintsBefore,after:await paints(),metrics:await page.evaluate(()=>window.rebotDual.renderMetrics())};
+      throw error;
+    }
+  }
   report.idlePreviews=paintDelta(idlePaintsBefore,await paints());
   if(!baseline)assert(Object.values(report.idlePreviews).every(count=>count>0),'all three preview canvases must keep painting while the scene is idle');
   await page.mouse.move(100,470);
