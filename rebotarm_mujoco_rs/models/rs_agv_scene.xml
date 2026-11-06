@@ -249,7 +249,7 @@
                       <geom name="gripper_left_stop_collision" type="mesh" mesh="gripper_left_stop_collision" pos="0 -0.041939 -0.0000734" quat="0.4999982 -0.5 0.5 -0.5000018" rgba="0 0 0 0" group="3" contype="1" conaffinity="1" condim="6" friction="1.5 0.04 0.01" solref="0.002 1" solimp="0.98 0.995 0.0005" />
                     </body>
                     <body name="gripper_right" pos="-0.041939 0.0000734 0" quat="0.4999982 -0.5 -0.5 -0.5000018">
-                      <joint name="joint_right" type="slide" axis="0 0 1" limited="true" range="0 0.0715" damping="5.0" frictionloss="0.5" />
+                      <joint name="joint_right" type="slide" axis="0 0 1" limited="true" range="0 0.05" damping="5.0" frictionloss="0.5" />
                       <inertial pos="0.0021801 -0.018709 0.0093219" mass="0.0752" diaginertia="0.0000109878 0.0000095015 0.0000093078" />
                       <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_pla_black_mat" type="mesh" mesh="pla_right" />
                       <geom pos="0 0 0" group="1" contype="0" conaffinity="0" material="rs_anodized_silver_mat" type="mesh" mesh="cnc_right" />
