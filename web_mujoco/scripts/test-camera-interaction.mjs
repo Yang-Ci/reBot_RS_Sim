@@ -12,8 +12,9 @@ const baseline=process.argv.includes('--baseline');
 const softwareRendering=!process.argv.includes('--hardware');
 // Match the visual UI check: reduce only main-canvas pixels on CPU-only CI.
 const deviceScaleFactor=softwareRendering ? .5 : 1;
-// Three serialized captures can each take many seconds on a software GPU.
-const previewTimeout=softwareRendering?180000:10000;
+// CI uses SwiftShader and captures previews serially. A single capture has taken
+// nearly 47 seconds on the hosted runner, so allow time for all three cameras.
+const previewTimeout=softwareRendering?240000:10000;
 const browser=await chromium.launch({channel:process.env.PLAYWRIGHT_CHANNEL||(process.platform==='win32'?'chrome':undefined),headless:true,
   args:[...(softwareRendering?['--use-angle=swiftshader']:[]),'--enable-webgl','--ignore-gpu-blocklist']});
 const errors=[],report={url,label,environment:{softwareRendering,deviceScaleFactor,previewTimeout}};
@@ -91,12 +92,17 @@ try {
     }
     requestAnimationFrame(tick);
   }));
-  for(let i=0;i<24;i++) {
-    const before=await snapshot();await page.mouse.wheel(0,i<12?-40:40);await page.waitForTimeout(20);
+  const burstDeadline=Date.now()+previewTimeout;
+  let burstPaintsEnd;
+  for(let i=0;;i++) {
+    const before=await snapshot();await page.mouse.wheel(0,Math.floor(i/12)%2===0?-40:40);await page.waitForTimeout(20);
     if(!baseline&&softwareRendering)await waitForDraw(before);
+    if(i>=23&&(i+1)%6===0) {
+      burstPaintsEnd=await paints();
+      if(baseline||Object.values(paintDelta(burstPaintsBefore,burstPaintsEnd)).every(count=>count>0)||Date.now()>=burstDeadline)break;
+    }
   }
   report.burstEnd=await snapshot();
-  const burstPaintsEnd=await paints();
   await page.evaluate(()=>{window.__cameraProbeActive=false;});
   const paintTimes=await paintProbe;
   report.burst={draws:report.burstEnd.mainDraws-burstBefore.mainDraws,paintTimes,
