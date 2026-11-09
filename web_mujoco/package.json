@@ -26,16 +26,19 @@
     "test:visual-ui": "node scripts/test-visual-ui.mjs",
     "test:camera": "node scripts/test-camera-interaction.mjs",
     "test:yolo-grasp": "node scripts/test-yolo-grasp-ui.mjs",
+    "test:yolo-reobservation": "node scripts/test-yolo-reobservation.mjs",
     "test:contact": "node scripts/test-contact-grasp.mjs",
     "test:ci": "npm run test:actions && npm run test:motion && npm run test:timing && npm run test:dual && npm run test:cooperation && npm run test:coffee && npm run test:cooperation:robustness",
     "test:variants": "node scripts/test-agv-path-planner.mjs && node scripts/smoke-variants.mjs",
     "test:campus": "node scripts/build-campus-scene.mjs && node scripts/test-campus.mjs",
     "test:timing": "node scripts/test-simulation-clock.mjs",
     "test:surfaces": "node scripts/test-lab-surfaces.mjs && node scripts/test-campus-ground.mjs",
-    "test:explode": "node scripts/test-explosion-layout.mjs && node scripts/test-explosion-timeline.mjs"
+    "test:explode": "node scripts/test-explosion-layout.mjs && node scripts/test-explosion-timeline.mjs",
+    "test:yolo-browser": "node scripts/test-yolo-browser.mjs"
   },
   "dependencies": {
     "@mujoco/mujoco": "^3.12.0",
+    "onnxruntime-web": "^1.22.0",
     "three": "^0.170.0"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import { ARM_JOINTS, homePose } from './kinematics.js';
 import { graspOrientation, planGraspDescent, planGraspPlacement } from './grasp-descent.js';
+import { MAX_GRASP_FRAME_AGE_MS, validateGraspReobservation } from './grasp-reobservation.js';
 
 export const VISION_TARGETS = [
   { id: 'red', body: 'red_cube', labelKey: 'vision.red', color: '#ef5260', graspYawPeriod: Math.PI / 2 },
@@ -68,6 +69,8 @@ const STAGE_PROGRESS = {
   centering: 0.04,
   opening: 0.08,
   approach: 0.22,
+  reobserving: 0.26,
+  'correcting-approach': 0.30,
   descend: 0.38,
   closing: 0.50,
   lift: 0.64,
@@ -100,6 +103,7 @@ export function createGraspDemo({
   visionTargets = VISION_TARGETS,
   storageZones = STORAGE_ZONES,
   getObserverPosition,
+  reobserveGrasp,
   onChange
 }) {
   const bodyType = mujoco.mjtObj.mjOBJ_BODY.value;
@@ -130,6 +134,7 @@ export function createGraspDemo({
   let ikAngles = {};
   let objectStart = null;
   let pickupObservation = null;
+  let observationRequest = null;
   let moveTarget = null;
   let dropTarget = null;
   let mode = 'put-away';
@@ -295,7 +300,8 @@ export function createGraspDemo({
   function start(next = selectedId, observation = null) {
     if (running || !targets.some(target => target.id === next)) return false;
     if (observation && (observation.source !== 'yolo-rgbd' ||
-        ![observation.position?.x, observation.position?.y, observation.position?.z, observation.yaw].every(Number.isFinite))) return false;
+        !reobserveGrasp || ![observation.position?.x, observation.position?.y, observation.position?.z,
+          observation.yaw, observation.timestamp, observation.capturedAtMs].every(Number.isFinite))) return false;
     setSelected(next);
     running = true;
     stackQueue = [];
@@ -314,6 +320,8 @@ export function createGraspDemo({
   function cancel(reason = 'cancelled') {
     if (!running && stage === 'idle') return false;
     running = false;
+    observationRequest?.abort();
+    observationRequest = null;
     stage = 'idle';
     message = reason;
     lastError = 0;
@@ -345,6 +353,8 @@ export function createGraspDemo({
       return;
     }
     running = false;
+    observationRequest?.abort();
+    observationRequest = null;
     message = reason;
     physics.setTarget('joint7', OPEN_WIDTH);
     enter('failed');
@@ -569,6 +579,45 @@ export function createGraspDemo({
     }
   }
 
+  function beginReobservation() {
+    const request = new AbortController();
+    observationRequest = request;
+    const requestedAt = data.time;
+    // Hold the arm at the reached high pose while inference is pending.
+    physics.setTargets(currentArmPose());
+    enter('reobserving');
+    const timeout = setTimeout(() => {
+      if (observationRequest === request && running) fail('vision-unreliable');
+    }, 12000);
+    Promise.resolve().then(() => reobserveGrasp(selectedId, request.signal)).then((observed) => {
+      if (observationRequest !== request || !running) return;
+      const reason = request.signal.aborted ? 'vision-unreliable' :
+        validateGraspReobservation(pickupObservation, observed, selected().graspYawPeriod, requestedAt, performance.now(), data.time);
+      if (reason) { fail(reason); return; }
+      observationRequest = null;
+      pickupObservation = observed;
+      objectStart = { ...observed.position };
+      ikAngles = currentArmPose();
+      enter('correcting-approach', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.10 });
+    }).catch(() => {
+      if (observationRequest === request && running) fail('vision-unreliable');
+    }).finally(() => clearTimeout(timeout));
+  }
+
+  function beginDescent() {
+    const target = { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.003 };
+    if (selected().graspYawPeriod !== undefined) {
+      const bearing = Math.atan2(target.y - (workspaceOffset.y || 0), target.x - (workspaceOffset.x || 0));
+      const dropBearing = Math.atan2(dropTarget.y - (workspaceOffset.y || 0), dropTarget.x - (workspaceOffset.x || 0));
+      graspPlan = planGraspDescent({
+        mujoco, model, data, joints, ik, startAngles: currentArmPose(), object: selected(), target, bearing,
+        drop: dropTarget, dropBearing, observation: pickupObservation
+      });
+      if (!graspPlan) { fail('grasp-pose-unreachable'); return; }
+    }
+    enter('descend', target);
+  }
+
   function update() {
     if (!running) return snapshot();
     const now = data.time;
@@ -593,25 +642,25 @@ export function createGraspDemo({
     } else if (stage === 'opening') {
       const width = data.qpos[joints.byName.joint7.qposadr];
       if ((width > OPEN_WIDTH - 0.006 && elapsed > 0.18) || elapsed > 1.1) {
-        enter('approach', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.10 });
+        if (pickupObservation) {
+          // Stop short of the object so the overhead camera can see its top.
+          const relativeX = objectStart.x - (workspaceOffset.x || 0);
+          const relativeY = objectStart.y - (workspaceOffset.y || 0);
+          const radius = Math.hypot(relativeX, relativeY);
+          const offset = radius > 0 ? Math.min(0.10, radius * 0.35) / radius : 0;
+          enter('approach', { x: objectStart.x - offset * relativeX,
+            y: objectStart.y - offset * relativeY, z: objectStart.z + 0.13 });
+        } else enter('approach', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.10 });
       }
     } else if (stage === 'approach') {
       if (moveStep(dt)) {
-        const target = { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.003 };
-        if (selected().graspYawPeriod !== undefined) {
-          const bearing = Math.atan2(target.y - (workspaceOffset.y || 0), target.x - (workspaceOffset.x || 0));
-          const dropBearing = Math.atan2(dropTarget.y - (workspaceOffset.y || 0), dropTarget.x - (workspaceOffset.x || 0));
-          graspPlan = planGraspDescent({
-            mujoco, model, data, joints, ik, startAngles: currentArmPose(), object: selected(), target, bearing,
-            drop: dropTarget, dropBearing, observation: pickupObservation
-          });
-          if (!graspPlan) {
-            fail('grasp-pose-unreachable');
-            return snapshot();
-          }
-        }
-        enter('descend', target);
+        if (pickupObservation) beginReobservation();
+        else beginDescent();
       } else if (timedOut()) fail('approach-timeout');
+    } else if (stage === 'correcting-approach') {
+      if (performance.now() - pickupObservation.capturedAtMs > MAX_GRASP_FRAME_AGE_MS) fail('vision-unreliable');
+      else if (moveStep(dt)) beginDescent();
+      else if (timedOut()) fail('approach-timeout');
     } else if (stage === 'descend') {
       let gripReady;
       if (graspPlan) {
@@ -726,6 +775,8 @@ export function createGraspDemo({
 
   function reset() {
     running = false;
+    observationRequest?.abort();
+    observationRequest = null;
     stage = 'idle';
     stageStartedAt = data.time;
     lastUpdateAt = data.time;

@@ -9,6 +9,7 @@ import { createTcpDrag } from './tcp-drag.js';
 import { createPartExplorer } from './part-explorer.js';
 import { createGraspDemo } from './grasp-demo.js';
 import { observeYoloGrasp } from './yolo-grasp.js';
+import { MAX_GRASP_FRAME_AGE_MS } from './grasp-reobservation.js';
 import { createContactTelemetry } from './contact-telemetry.js';
 import { createTelemetryPanel } from './telemetry-panel.js';
 import { OBJECT_MOVE_STEP, createObjectPositionController } from './object-position-control.js';
@@ -107,7 +108,7 @@ const LOAD_STAGE_PROGRESS = {
 };
 
 const modelVariant = selectedModelVariant();
-const yoloEnabled = import.meta.env.DEV && modelVariant.id === 'arm' && new URLSearchParams(location.search).get('vision') === 'yolo';
+const yoloEnabled = modelVariant.id === 'arm';
 if (startYoloGraspEl) startYoloGraspEl.hidden = !yoloEnabled;
 const navigationLayout = modelVariant.navigation || { bounds: AGV_NAV_BOUNDS, obstacles: LAB_NAV_OBSTACLES };
 document.documentElement.dataset.modelVariant = modelVariant.id;
@@ -642,6 +643,18 @@ async function main() {
       y: view.camera.position.y,
       z: view.camera.position.z
     }),
+    reobserveGrasp: async (id, signal) => {
+      yoloGraspStatusEl.textContent = t('grasp.yoloReobserving');
+      const observation = await observeYoloGrasp(view, id, signal, yoloGraspPreviewEl);
+      if (observation && !signal.aborted) {
+        yoloGraspStatusEl.textContent = t('grasp.yoloPose', {
+          confidence: Math.round(observation.confidence * 100),
+          x: Math.round(observation.position.x * 1000), y: Math.round(observation.position.y * 1000),
+          yaw: Math.round(observation.yaw * 180 / Math.PI)
+        });
+      }
+      return observation;
+    },
     onChange: (state) => {
       graspState = state;
       selectedVisionTarget = state.selectedId;
@@ -656,7 +669,13 @@ async function main() {
         if (state.stage === 'complete') {
           setStatus(t(state.mode === 'stack' ? 'status.stackComplete' : 'status.graspComplete'));
         }
-        else if (state.stage === 'failed') setStatus(t('status.graspFailed'));
+        else if (state.stage === 'failed') {
+          setStatus(t('status.graspFailed'));
+          if (state.message.startsWith('vision-')) {
+            yoloGraspStatusEl.hidden = false;
+            yoloGraspStatusEl.textContent = t(`grasp.${state.message}`);
+          }
+        }
         else if (state.running) setStatus(t(`status.grasp.${state.stage}`));
       }
       const editingAvailable = !modelVariant.hasAgv && !state.running && !yoloRequest && explosionState.progress <= 0;
@@ -904,7 +923,8 @@ async function main() {
     yoloRequest = request;
     physics.setTargets(readAngles(data, joints));
     const target = selectedVisionTarget;
-    const timeout = setTimeout(() => request.abort(), 12000);
+    // The first observation includes the initial model download and startup.
+    const timeout = setTimeout(() => request.abort(), 120000);
     yoloGraspStatusEl.hidden = false;
     yoloGraspStatusEl.textContent = t('grasp.yoloScanning');
     yoloGraspPreviewEl.hidden = true;
@@ -912,7 +932,7 @@ async function main() {
     try {
       const observed = await observeYoloGrasp(view, target, request.signal, yoloGraspPreviewEl);
       if (yoloRequest !== request || request.signal.aborted) return;
-      if (!observed || !graspDemo.start(target, observed)) {
+      if (!observed || performance.now() - observed.capturedAtMs > MAX_GRASP_FRAME_AGE_MS || !graspDemo.start(target, observed)) {
         yoloGraspStatusEl.textContent = t('grasp.yoloNoPose');
         return;
       }
@@ -937,7 +957,10 @@ async function main() {
   });
   cancelGraspEl?.addEventListener('click', () => {
     if (stopYoloRequest()) yoloGraspStatusEl.hidden = true;
-    else if (graspDemo.cancel()) setStatus(t('status.graspCancelled'));
+    else if (graspDemo.cancel()) {
+      if (yoloEnabled) yoloGraspStatusEl.hidden = true;
+      setStatus(t('status.graspCancelled'));
+    }
   });
   if (yoloEnabled) resetEl.addEventListener('click', () => {
     stopYoloRequest();

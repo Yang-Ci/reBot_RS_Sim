@@ -1,5 +1,6 @@
 import { paintCameraFrame } from './camera-sampler.js';
 import { pixelToWorld } from './rgbd-perception.js';
+import { detectYolo, initializeYolo } from './yolo-browser-runtime.js';
 
 const FRAME_SIZE = { width: 640, height: 480 };
 const TABLE_HEIGHT = 0.10;
@@ -45,10 +46,10 @@ function fitRectangle(points) {
 
 function measuredPose(frame, detection) {
   const shape = SHAPES[detection.id];
-  const { box, polygon } = detection;
+  const { box, polygon, mask } = detection;
   if (!shape || !Array.isArray(box) || box.length !== 4 || !box.every(Number.isFinite) ||
-      !Array.isArray(polygon) || polygon.length < 3 || polygon.length > 2048 ||
-      !polygon.every(point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))) return null;
+      (!mask && (!Array.isArray(polygon) || polygon.length < 3 || polygon.length > 2048 ||
+      !polygon.every(point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))))) return null;
   const [x1, y1, x2, y2] = box;
   if (x2 <= x1 || y2 <= y1 || x2 - x1 > 160 || y2 - y1 > 160) return null;
 
@@ -56,7 +57,9 @@ function measuredPose(frame, detection) {
   const expectedTop = TABLE_HEIGHT + shape.height;
   for (let y = Math.max(0, Math.floor(y1)); y <= Math.min(frame.height - 1, Math.ceil(y2)); y++) {
     for (let x = Math.max(0, Math.floor(x1)); x <= Math.min(frame.width - 1, Math.ceil(x2)); x++) {
-      if (!insidePolygon(x, y, polygon)) continue;
+      const inMask = mask ? x >= mask.left && x < mask.left + mask.width && y >= mask.top && y < mask.top + mask.height &&
+        mask.data[(y - mask.top) * mask.width + x - mask.left] : insidePolygon(x, y, polygon);
+      if (!inMask) continue;
       const point = pixelToWorld(frame, x, frame.height - 1 - y);
       if (point && Math.abs(point[2] - expectedTop) < 0.005) points.push(point);
     }
@@ -80,19 +83,16 @@ function measuredPose(frame, detection) {
 }
 
 export async function observeYoloGrasp(view, id, signal, preview) {
+  await initializeYolo(signal);
+  const capturedAtMs = performance.now();
   const frame = await view.captureCamera('overhead', { ...FRAME_SIZE, asyncReadback: true });
   signal.throwIfAborted();
   const canvas = document.createElement('canvas');
   canvas.width = frame.width;
   canvas.height = frame.height;
   paintCameraFrame(canvas.getContext('2d'), frame);
-  const image = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-  if (!image) throw new Error('Could not encode overhead camera frame');
-  const response = await fetch(`${import.meta.env.BASE_URL}api/yolo/detect`, {
-    method: 'POST', body: image, signal, cache: 'no-store'
-  });
-  if (!response.ok) throw new Error(`Local YOLO service returned ${response.status}`);
-  const { detections } = await response.json();
+  const pixels = canvas.getContext('2d').getImageData(0, 0, frame.width, frame.height).data;
+  const detections = await detectYolo(pixels, id, signal);
   signal.throwIfAborted();
   const candidates = detections.filter(item => item.id === id && Number.isFinite(item.confidence) && item.confidence >= MIN_CONFIDENCE)
     .map(item => ({ detection: item, pose: measuredPose(frame, item) })).filter(item => item.pose);
@@ -111,5 +111,5 @@ export async function observeYoloGrasp(view, id, signal, preview) {
     }
     preview.hidden = false;
   }
-  return selected?.pose ?? null;
+  return selected ? { ...selected.pose, timestamp: frame.timestamp, capturedAtMs } : null;
 }

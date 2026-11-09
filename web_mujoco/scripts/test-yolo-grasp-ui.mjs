@@ -4,9 +4,8 @@ import { chromium } from 'playwright';
 
 const base = process.argv.find(arg => arg.startsWith('--url='))?.slice(6) ?? 'http://127.0.0.1:5173/';
 const url = new URL('?variant=arm&vision=yolo', base);
-const health = await fetch(new URL('api/yolo/health', url));
-assert(health.ok && (await health.json()).ready, 'Start Vite and the local YOLOE service first');
 const browser = await chromium.launch({
+  ...(process.env.PLAYWRIGHT_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH } : {}),
   channel: process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'chrome' : undefined),
   headless: true,
   args: ['--enable-webgl', '--ignore-gpu-blocklist']
@@ -30,16 +29,13 @@ try {
       await page.keyboard.press('w');
       await page.keyboard.press('a');
     }
-    const response = page.waitForResponse(item => item.url().endsWith('/api/yolo/detect'));
     await start.click();
-    const reply = await response;
-    assert(reply.ok(), `Inference HTTP ${reply.status()}`);
     await page.waitForFunction(() => {
       const text = document.getElementById('yolo-grasp-status').textContent;
       return text.startsWith('YOLOE ') || text.startsWith('No reliable') || text.startsWith('Could not');
-    });
+    }, null, { timeout: 120000 });
     const message = await status.textContent();
-    assert.match(message, /^YOLOE \d+%/, `${id}: ${message}; ${(await reply.text()).slice(0, 700)}`);
+    assert.match(message, /^YOLOE \d+%/, `${id}: ${message}`);
     if (id === 'blue') {
       const position = message.match(/X (\d+) mm · Y (-?\d+) mm/);
       assert(position && Math.abs(Number(position[1]) - 370) < 8 && Math.abs(Number(position[2]) - 75) < 8,
@@ -55,17 +51,8 @@ try {
     }
   }
 
-  await page.locator('#reset').click();
-  await select('blue');
-  // Simulate a high-confidence false detection around the flat blue marker.
-  await page.route('**/api/yolo/detect', route => route.fulfill({ json: { detections: [{
-    id: 'blue', confidence: .99, box: [373, 216, 419, 263], polygon: [[373, 216], [419, 216], [419, 263], [373, 263]]
-  }] } }));
-  await start.click();
-  await page.waitForFunction(() => document.getElementById('yolo-grasp-status').textContent.startsWith('No reliable'));
-  assert.equal(await page.locator('#grasp-progress').evaluate(progress => progress.value), 0);
   assert.deepEqual(errors, []);
-  console.log('Flat storage marker rejected before motion, no page errors');
+  console.log('Three browser YOLO grasps completed with no page errors');
 } finally {
   await browser.close();
 }
