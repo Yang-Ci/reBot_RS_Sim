@@ -8,6 +8,7 @@ import { createTcpIk } from './tcp-ik.js';
 import { createTcpDrag } from './tcp-drag.js';
 import { createPartExplorer } from './part-explorer.js';
 import { createGraspDemo } from './grasp-demo.js';
+import { observeYoloGrasp } from './yolo-grasp.js';
 import { createContactTelemetry } from './contact-telemetry.js';
 import { createTelemetryPanel } from './telemetry-panel.js';
 import { OBJECT_MOVE_STEP, createObjectPositionController } from './object-position-control.js';
@@ -53,6 +54,9 @@ const graspControlsEl = document.getElementById('grasp-controls');
 const graspHintEl = document.getElementById('grasp-hint');
 const visionTargetsEl = document.getElementById('vision-targets');
 const startGraspEl = document.getElementById('start-grasp');
+const startYoloGraspEl = document.getElementById('start-yolo-grasp');
+const yoloGraspStatusEl = document.getElementById('yolo-grasp-status');
+const yoloGraspPreviewEl = document.getElementById('yolo-grasp-preview');
 const startStackEl = document.getElementById('start-stack');
 const cancelGraspEl = document.getElementById('cancel-grasp');
 const graspProgressEl = document.getElementById('grasp-progress');
@@ -103,6 +107,8 @@ const LOAD_STAGE_PROGRESS = {
 };
 
 const modelVariant = selectedModelVariant();
+const yoloEnabled = import.meta.env.DEV && modelVariant.id === 'arm' && new URLSearchParams(location.search).get('vision') === 'yolo';
+if (startYoloGraspEl) startYoloGraspEl.hidden = !yoloEnabled;
 const navigationLayout = modelVariant.navigation || { bounds: AGV_NAV_BOUNDS, obstacles: LAB_NAV_OBSTACLES };
 document.documentElement.dataset.modelVariant = modelVariant.id;
 if (modelVariantEl) {
@@ -254,6 +260,7 @@ let wristCameraCollapsed = false;
 let selectedVisionTarget = 'red';
 let contactVisualsEnabled = true;
 let graspState = { running: false, stage: 'idle', progress: 0, message: '' };
+let yoloRequest = null;
 let agvDocked = !modelVariant.hasAgv;
 let navGoalPickMode = false;
 let agvNavigationState = { active: false, kind: 'point', goal: null, distance: 0 };
@@ -339,22 +346,29 @@ function renderAgvNavigationControls() {
 
 function renderGraspControls() {
   const dockingRequired = modelVariant.hasAgv && !agvDocked;
+  const busy = graspState.running || yoloRequest !== null;
   visionTargetsEl?.querySelectorAll('[data-target]').forEach((button) => {
     const active = button.dataset.target === selectedVisionTarget;
     button.classList.toggle('active', active);
     button.setAttribute('aria-pressed', String(active));
-    button.disabled = graspState.running;
+    button.disabled = busy;
   });
-  if (startGraspEl) startGraspEl.disabled = dockingRequired || graspState.running || explosionState.progress > 0;
-  if (startStackEl) startStackEl.disabled = dockingRequired || graspState.running || explosionState.progress > 0;
-  if (cancelGraspEl) cancelGraspEl.disabled = !graspState.running;
+  const canStart = !dockingRequired && !busy && explosionState.progress <= 0;
+  if (startGraspEl) startGraspEl.disabled = !canStart;
+  if (startYoloGraspEl) startYoloGraspEl.disabled = !canStart;
+  if (startStackEl) startStackEl.disabled = !canStart;
+  if (cancelGraspEl) cancelGraspEl.disabled = !busy;
   if (graspProgressEl) graspProgressEl.value = graspState.progress || 0;
   if (graspProgressValueEl) graspProgressValueEl.textContent = `${Math.round((graspState.progress || 0) * 100)}%`;
-  if (graspStageEl) graspStageEl.textContent = t(`grasp.stage.${graspState.stage}`);
-  document.body.classList.toggle('grasp-running', graspState.running);
-  if (toggleDragEl) toggleDragEl.disabled = graspState.running;
-  if (gripperOpenEl) gripperOpenEl.disabled = graspState.running;
-  if (gripperCloseEl) gripperCloseEl.disabled = graspState.running;
+  if (graspStageEl) {
+    graspStageEl.textContent = t(`grasp.stage.${graspState.stage}`);
+    graspStageEl.dataset.stage = graspState.stage;
+    graspStageEl.dataset.message = graspState.message;
+  }
+  document.body.classList.toggle('grasp-running', busy);
+  if (toggleDragEl) toggleDragEl.disabled = busy;
+  if (gripperOpenEl) gripperOpenEl.disabled = busy;
+  if (gripperCloseEl) gripperCloseEl.disabled = busy;
   renderAgvNavigationControls();
 }
 
@@ -577,7 +591,7 @@ async function main() {
   }
 
   panel = createJointCallouts(calloutsEl, joints, (name, value) => {
-    physics.setTarget(name, value);
+    if (!yoloRequest) physics.setTarget(name, value);
   });
   panel.setGuidesVisible(guidesVisible);
   toggleGuidesEl?.addEventListener('click', () => {
@@ -645,7 +659,7 @@ async function main() {
         else if (state.stage === 'failed') setStatus(t('status.graspFailed'));
         else if (state.running) setStatus(t(`status.grasp.${state.stage}`));
       }
-      const editingAvailable = !modelVariant.hasAgv && !state.running && explosionState.progress <= 0;
+      const editingAvailable = !modelVariant.hasAgv && !state.running && !yoloRequest && explosionState.progress <= 0;
       if (objectPositionController.isEnabled() !== editingAvailable) {
         objectPositionController.setEnabled(editingAvailable);
       }
@@ -654,7 +668,7 @@ async function main() {
   telemetryPanel = createTelemetryPanel(telemetryControlsEl);
   visionTargetsEl?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-target]');
-    if (!button || graspState.running) return;
+    if (!button || graspState.running || yoloRequest) return;
     selectedVisionTarget = button.dataset.target;
     graspDemo.setSelected(selectedVisionTarget);
     objectPositionController.setSelected(selectedVisionTarget);
@@ -863,24 +877,72 @@ async function main() {
   renderAgvSpeedControls();
   renderAgvNavigationControls();
 
-  startGraspEl?.addEventListener('click', () => {
-    if ((modelVariant.hasAgv && !agvDocked) || graspState.running || explosionState.progress > 0) return;
+  function prepareGrasp() {
+    if ((modelVariant.hasAgv && !agvDocked) || graspState.running || yoloRequest || explosionState.progress > 0) return false;
     stopAgv();
     objectPositionController.setEnabled(false);
     if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
     view.clearPartSelection();
-    graspDemo.start(selectedVisionTarget);
+    return true;
+  }
+
+  function stopYoloRequest() {
+    if (!yoloRequest) return false;
+    yoloRequest.abort();
+    yoloRequest = null;
+    objectPositionController.setEnabled(true);
+    renderGraspControls();
+    return true;
+  }
+
+  startGraspEl?.addEventListener('click', () => {
+    if (prepareGrasp()) graspDemo.start(selectedVisionTarget);
+  });
+  startYoloGraspEl?.addEventListener('click', async () => {
+    if (!yoloEnabled || explosionState.direction !== 0 || !prepareGrasp()) return;
+    const request = new AbortController();
+    yoloRequest = request;
+    physics.setTargets(readAngles(data, joints));
+    const target = selectedVisionTarget;
+    const timeout = setTimeout(() => request.abort(), 12000);
+    yoloGraspStatusEl.hidden = false;
+    yoloGraspStatusEl.textContent = t('grasp.yoloScanning');
+    yoloGraspPreviewEl.hidden = true;
+    renderGraspControls();
+    try {
+      const observed = await observeYoloGrasp(view, target, request.signal, yoloGraspPreviewEl);
+      if (yoloRequest !== request || request.signal.aborted) return;
+      if (!observed || !graspDemo.start(target, observed)) {
+        yoloGraspStatusEl.textContent = t('grasp.yoloNoPose');
+        return;
+      }
+      yoloGraspStatusEl.textContent = t('grasp.yoloPose', {
+        confidence: Math.round(observed.confidence * 100),
+        x: Math.round(observed.position.x * 1000), y: Math.round(observed.position.y * 1000),
+        yaw: Math.round(observed.yaw * 180 / Math.PI)
+      });
+    } catch {
+      if (yoloRequest === request) yoloGraspStatusEl.textContent = t('grasp.yoloUnavailable');
+    } finally {
+      clearTimeout(timeout);
+      if (yoloRequest === request) {
+        yoloRequest = null;
+        if (!graspDemo.isRunning()) objectPositionController.setEnabled(true);
+        renderGraspControls();
+      }
+    }
   });
   startStackEl?.addEventListener('click', () => {
-    if ((modelVariant.hasAgv && !agvDocked) || graspState.running || explosionState.progress > 0) return;
-    stopAgv();
-    objectPositionController.setEnabled(false);
-    if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);
-    view.clearPartSelection();
-    graspDemo.startStack();
+    if (prepareGrasp()) graspDemo.startStack();
   });
   cancelGraspEl?.addEventListener('click', () => {
-    if (graspDemo.cancel()) setStatus(t('status.graspCancelled'));
+    if (stopYoloRequest()) yoloGraspStatusEl.hidden = true;
+    else if (graspDemo.cancel()) setStatus(t('status.graspCancelled'));
+  });
+  if (yoloEnabled) resetEl.addEventListener('click', () => {
+    stopYoloRequest();
+    yoloGraspStatusEl.hidden = true;
+    yoloGraspPreviewEl.hidden = true;
   });
   toggleContactVisualsEl?.addEventListener('click', () => {
     contactVisualsEnabled = !contactVisualsEnabled;
@@ -891,6 +953,7 @@ async function main() {
   renderObjectEditHud();
   renderContactVisualsToggle();
   toggleExplosionEl?.addEventListener('click', () => {
+    if (yoloRequest) return;
     objectPositionController.setEnabled(false);
     if (cameraViewsVisible) setCameraViewsVisible(false);
     if (tcpDrag?.isEnabled()) tcpDrag.setEnabled(false);

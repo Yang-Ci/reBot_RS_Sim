@@ -339,6 +339,9 @@ async function main() {
     let alignmentStart = null;
     let maximumNonJ1AlignmentTravel = 0;
     let joint1AtApproach = null;
+    let graspTilt = null;
+    let jawAlignment = null;
+    let finalDescentDrift = 0;
     const graspDemo = createGraspDemo({
       mujoco, model, data, joints, physics, ik,
       onChange: (state) => {
@@ -357,6 +360,18 @@ async function main() {
           );
         } else if (state.stage === 'approach' && joint1AtApproach === null) {
           joint1AtApproach = data.qpos[joints.byName.joint1.qposadr];
+        } else if (state.stage === 'descend' && target === 'blue') {
+          const tcp = ik.tcpPosition();
+          if (tcp.z < state.objectStart.z + 0.023) {
+            finalDescentDrift = Math.max(finalDescentDrift,
+              Math.hypot(tcp.x - state.objectStart.x, tcp.y - state.objectStart.y));
+          }
+        } else if (state.stage === 'closing' && graspTilt === null) {
+          const hand = data.xmat.subarray(ik.bodyId * 9, ik.bodyId * 9 + 9);
+          const blockId = namedId(mujoco, model, mujoco.mjtObj.mjOBJ_BODY.value, body);
+          const block = data.xmat.subarray(blockId * 9, blockId * 9 + 9);
+          graspTilt = Math.acos(Math.max(-1, Math.min(1, -hand[6]))) * 180 / Math.PI;
+          jawAlignment = Math.abs(hand[1] * block[1] + hand[4] * block[4] + hand[7] * block[7]);
         }
       }
     });
@@ -385,6 +400,11 @@ async function main() {
       maximumNonJ1AlignmentTravel < 0.08,
       `${target} 在 J1 对准阶段仍有其他关节大幅运动：${maximumNonJ1AlignmentTravel}`
     );
+    if (target === 'blue') {
+      assert(graspTilt !== null && graspTilt < 25, `蓝块闭合时夹爪仍明显倾斜：${graspTilt}°`);
+      assert(jawAlignment > 0.98, `蓝块闭合时夹爪没有沿短边对齐：${jawAlignment}`);
+      assert(finalDescentDrift < 0.006, `蓝块最后一段下降横向偏移过大：${finalDescentDrift} m`);
+    }
     assert(
       Math.abs(finalPosition[0] - zone.x) < 0.025 &&
         Math.abs(finalPosition[1] - zone.y) < 0.025 &&
@@ -399,7 +419,8 @@ async function main() {
     graspResults[target] = {
       stage: graspState.stage,
       position: finalPosition,
-      carryOffset: graspState.carryOffset
+      carryOffset: graspState.carryOffset,
+      graspTilt
     };
   }
 

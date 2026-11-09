@@ -186,6 +186,12 @@ export default defineConfig(({ command, mode }) => ({
   server: {
     port: 5173,
     strictPort: false,
+    proxy: {
+      [`${pagesBase()}api/yolo`]: {
+        target: 'http://127.0.0.1:8766',
+        rewrite: (url) => url.slice(pagesBase().length - 1)
+      }
+    },
     headers: {
       'Cache-Control': 'no-cache, no-store, must-revalidate'
     }

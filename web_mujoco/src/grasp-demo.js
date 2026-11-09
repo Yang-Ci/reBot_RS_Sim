@@ -1,9 +1,10 @@
 import { ARM_JOINTS, homePose } from './kinematics.js';
+import { graspOrientation, planGraspDescent, planGraspPlacement } from './grasp-descent.js';
 
 export const VISION_TARGETS = [
-  { id: 'red', body: 'red_cube', labelKey: 'vision.red', color: '#ef5260' },
-  { id: 'blue', body: 'blue_block', labelKey: 'vision.blue', color: '#45aef2' },
-  { id: 'yellow', body: 'yellow_cylinder', labelKey: 'vision.yellow', color: '#e6d957' }
+  { id: 'red', body: 'red_cube', labelKey: 'vision.red', color: '#ef5260', graspYawPeriod: Math.PI / 2 },
+  { id: 'blue', body: 'blue_block', labelKey: 'vision.blue', color: '#45aef2', graspYawPeriod: Math.PI },
+  { id: 'yellow', body: 'yellow_cylinder', labelKey: 'vision.yellow', color: '#e6d957', graspYawPeriod: 0 }
 ];
 
 export const STORAGE_ZONES = {
@@ -20,6 +21,7 @@ export const STACK_TARGETS = {
 
 const OPEN_WIDTH = 0.046;
 const MOVE_TIMEOUT = 4.5;
+const GRASP_ROTATION_TOLERANCE = 0.12;
 const PLACE_PRESS_DEPTH = 0.0005;
 const SUPPORT_SETTLE_TIME = 0.10;
 const TOWER_SETTLE_TIME = 0.35;
@@ -127,6 +129,7 @@ export function createGraspDemo({
   let lastUpdateAt = 0;
   let ikAngles = {};
   let objectStart = null;
+  let pickupObservation = null;
   let moveTarget = null;
   let dropTarget = null;
   let mode = 'put-away';
@@ -143,6 +146,8 @@ export function createGraspDemo({
   let pregraspPose = null;
   let pregraspAlignedPose = null;
   let alignmentJoint1 = null;
+  let graspPlan = null;
+  let placementPlan = null;
   let lastError = 0;
   let message = '';
 
@@ -242,11 +247,12 @@ export function createGraspDemo({
     });
   }
 
-  function begin(nextId, nextDropTarget, nextMode = 'put-away') {
+  function begin(nextId, nextDropTarget, nextMode = 'put-away', observation = null) {
     selectedId = nextId;
     pendingStackId = null;
     mode = nextMode;
-    objectStart = bodyPosition(selected().bodyId);
+    pickupObservation = observation;
+    objectStart = observation ? { ...observation.position } : bodyPosition(selected().bodyId);
     dropTarget = nextDropTarget;
     expectedSupportBodyId =
       nextMode === 'stack' && nextId === 'red'
@@ -255,6 +261,8 @@ export function createGraspDemo({
           ? targets.find((target) => target.id === 'red').bodyId
           : tableBodyId;
     carryOffset = null;
+    graspPlan = null;
+    placementPlan = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];
@@ -284,12 +292,14 @@ export function createGraspDemo({
     enter('preparing');
   }
 
-  function start(next = selectedId) {
-    if (running) return false;
+  function start(next = selectedId, observation = null) {
+    if (running || !targets.some(target => target.id === next)) return false;
+    if (observation && (observation.source !== 'yolo-rgbd' ||
+        ![observation.position?.x, observation.position?.y, observation.position?.z, observation.yaw].every(Number.isFinite))) return false;
     setSelected(next);
     running = true;
     stackQueue = [];
-    begin(next, workspacePoint(storageZones[next]));
+    begin(next, workspacePoint(storageZones[next]), 'put-away', observation);
     return true;
   }
 
@@ -311,7 +321,10 @@ export function createGraspDemo({
     stackQueue = [];
     pendingStackId = null;
     mode = 'put-away';
+    pickupObservation = null;
     carryOffset = null;
+    graspPlan = null;
+    placementPlan = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];
@@ -350,6 +363,12 @@ export function createGraspDemo({
     return data.time - stageStartedAt > MOVE_TIMEOUT;
   }
 
+  function followGraspPath(path, elapsed) {
+    ikAngles = path.anglesAt(elapsed);
+    physics.setTargets(ikAngles);
+    lastError = distance(ik.tcpPosition(), moveTarget);
+  }
+
   function objectHasSupportContact() {
     const selectedBodyId = selected().bodyId;
     // Embind returns an owned vector copy; release it and each contact handle.
@@ -370,8 +389,9 @@ export function createGraspDemo({
     return false;
   }
 
-  function objectHasGripContact() {
+  function objectHasGripContact(requireBoth = false) {
     const selectedBodyId = selected().bodyId;
+    const touchingFingers = new Set();
     const contacts = data.contact;
     try {
       const count = Math.min(data.ncon, contacts.size());
@@ -381,8 +401,12 @@ export function createGraspDemo({
         try {
           const body1 = model.geom_bodyid[contact.geom1];
           const body2 = model.geom_bodyid[contact.geom2];
-          const touchesSelected = body1 === selectedBodyId || body2 === selectedBodyId;
-          if (touchesSelected && (fingerBodies.has(body1) || fingerBodies.has(body2))) return true;
+          const other = body1 === selectedBodyId ? body2 : body2 === selectedBodyId ? body1 : -1;
+          if (fingerBodies.has(other)) {
+            if (!requireBoth) return true;
+            touchingFingers.add(other);
+            if (touchingFingers.size === 2) return true;
+          }
         } finally { contact.delete(); }
       }
     } finally { contacts.delete(); }
@@ -572,20 +596,48 @@ export function createGraspDemo({
         enter('approach', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.10 });
       }
     } else if (stage === 'approach') {
-      if (moveStep(dt)) enter('descend', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.003 });
-      else if (timedOut()) fail('approach-timeout');
+      if (moveStep(dt)) {
+        const target = { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.003 };
+        if (selected().graspYawPeriod !== undefined) {
+          const bearing = Math.atan2(target.y - (workspaceOffset.y || 0), target.x - (workspaceOffset.x || 0));
+          const dropBearing = Math.atan2(dropTarget.y - (workspaceOffset.y || 0), dropTarget.x - (workspaceOffset.x || 0));
+          graspPlan = planGraspDescent({
+            mujoco, model, data, joints, ik, startAngles: currentArmPose(), object: selected(), target, bearing,
+            drop: dropTarget, dropBearing, observation: pickupObservation
+          });
+          if (!graspPlan) {
+            fail('grasp-pose-unreachable');
+            return snapshot();
+          }
+        }
+        enter('descend', target);
+      } else if (timedOut()) fail('approach-timeout');
     } else if (stage === 'descend') {
-      const gripReady =
-        elapsed > 0.15 &&
-        distance(ik.tcpPosition(), moveTarget) < 0.018 &&
-        objectHasGripContact();
-      if (moveStep(dt) || gripReady) {
+      let gripReady;
+      if (graspPlan) {
+        followGraspPath(graspPlan.descent, elapsed);
+        gripReady = elapsed >= graspPlan.descent.duration && lastError < 0.006 &&
+          graspOrientation(data, ik.bodyId).angleTo(graspPlan.orientation) < GRASP_ROTATION_TOLERANCE;
+      } else {
+        const hasNearContact = elapsed > 0.15 &&
+          distance(ik.tcpPosition(), moveTarget) < 0.018 && objectHasGripContact();
+        gripReady = moveStep(dt) || hasNearContact;
+      }
+      if (gripReady) {
         physics.setTarget('joint7', 0);
         enter('closing');
-      } else if (timedOut()) fail('descend-timeout');
+      } else if (elapsed > (graspPlan?.descent.duration || 0) + MOVE_TIMEOUT) fail('descend-timeout');
     } else if (stage === 'closing') {
-      if (elapsed > 0.8) enter('lift', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.13 });
+      if (elapsed > 0.8) {
+        if (graspPlan && !objectHasGripContact(true)) fail('grasp-missed');
+        else enter('lift', { x: objectStart.x, y: objectStart.y, z: objectStart.z + 0.13 });
+      }
     } else if (stage === 'lift') {
+      if (graspPlan && elapsed < graspPlan.ascent.duration) {
+        followGraspPath(graspPlan.ascent, elapsed);
+        notify();
+        return snapshot();
+      }
       if (moveStep(dt)) {
         const object = bodyPosition(selected().bodyId);
         if (object.z < objectStart.z + 0.035) fail('grasp-missed');
@@ -596,14 +648,32 @@ export function createGraspDemo({
       } else if (timedOut()) fail('lift-timeout');
     } else if (stage === 'transfer') {
       if (moveStep(dt)) {
-        const offset = carryOffset || { z: -0.006 };
-        enter('place', gripAlignedDropTarget(dropTarget.z - offset.z - PLACE_PRESS_DEPTH));
+        if (graspPlan) {
+          placementPlan = planGraspPlacement({
+            mujoco, model, data, joints, ik, startAngles: currentArmPose(),
+            object: { bodyId: selected().bodyId, position: bodyPosition(selected().bodyId) },
+            drop: { ...dropTarget, z: dropTarget.z - PLACE_PRESS_DEPTH },
+            dropOrientation: graspPlan.dropOrientation, dropSeed: graspPlan.dropSeed
+          });
+          if (!placementPlan) {
+            fail('place-pose-unreachable');
+            return snapshot();
+          }
+          enter('place', placementPlan.target);
+        } else {
+          const offset = carryOffset || { z: -0.006 };
+          enter('place', gripAlignedDropTarget(dropTarget.z - offset.z - PLACE_PRESS_DEPTH));
+        }
       }
       else if (timedOut()) fail('transfer-timeout');
     } else if (stage === 'place') {
-      trackObjectOverDropTarget();
-      moveStep(dt);
+      if (placementPlan) followGraspPath(placementPlan.descent, elapsed);
+      else {
+        trackObjectOverDropTarget();
+        moveStep(dt);
+      }
       const supported =
+        (!placementPlan || elapsed >= placementPlan.descent.duration) &&
         objectIsAtDropTarget() &&
         objectHasSupportContact() &&
         selectedLinearSpeed() < MAX_PLACEMENT_SPEED;
@@ -612,7 +682,7 @@ export function createGraspDemo({
       if (supportContactSince !== null && now - supportContactSince >= SUPPORT_SETTLE_TIME) {
         physics.setTarget('joint7', OPEN_WIDTH);
         enter('release');
-      } else if (timedOut()) fail('place-timeout');
+      } else if (elapsed > (placementPlan?.descent.duration || 0) + MOVE_TIMEOUT) fail('place-timeout');
     } else if (stage === 'release') {
       const width = data.qpos[joints.byName.joint7.qposadr];
       const gripperIsClear = width > OPEN_WIDTH - 0.008;
@@ -620,6 +690,11 @@ export function createGraspDemo({
         enter('retreat', verticalRetreatTarget());
       }
     } else if (stage === 'retreat') {
+      if (placementPlan && elapsed < placementPlan.ascent.duration) {
+        followGraspPath(placementPlan.ascent, elapsed);
+        notify();
+        return snapshot();
+      }
       if (moveStep(dt)) {
         if (mode === 'stack') {
           enter('depart', {
@@ -655,11 +730,14 @@ export function createGraspDemo({
     stageStartedAt = data.time;
     lastUpdateAt = data.time;
     objectStart = null;
+    pickupObservation = null;
     moveTarget = null;
     dropTarget = null;
     pendingStackId = null;
     expectedSupportBodyId = tableBodyId;
     carryOffset = null;
+    graspPlan = null;
+    placementPlan = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];

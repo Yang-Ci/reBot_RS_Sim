@@ -47,16 +47,26 @@ function hasName(mujoco, model, type, name) {
   return mujoco.mj_name2id(model, type, name) >= 0;
 }
 
-function contactNames(mujoco, model, data) {
+function contactNames(mujoco, model, data, include = () => true) {
   const geomType = mujoco.mjtObj.mjOBJ_GEOM.value;
   const names = [];
-  const count = Math.min(data.ncon, data.contact.size());
-  for (let index = 0; index < count; index += 1) {
-    const contact = data.contact.get(index);
-    if (!contact) continue;
-    const geom1 = mujoco.mj_id2name(model, geomType, contact.geom1) || `geom#${contact.geom1}`;
-    const geom2 = mujoco.mj_id2name(model, geomType, contact.geom2) || `geom#${contact.geom2}`;
-    names.push(`${geom1}<->${geom2}`);
+  const contacts = data.contact;
+  try {
+    const count = Math.min(data.ncon, contacts.size());
+    for (let index = 0; index < count; index += 1) {
+      const contact = contacts.get(index);
+      if (!contact) continue;
+      try {
+        if (!include(model.geom_bodyid[contact.geom1], model.geom_bodyid[contact.geom2])) continue;
+        const geom1 = mujoco.mj_id2name(model, geomType, contact.geom1) || `geom#${contact.geom1}`;
+        const geom2 = mujoco.mj_id2name(model, geomType, contact.geom2) || `geom#${contact.geom2}`;
+        names.push(`${geom1}<->${geom2}`);
+      } finally {
+        contact.delete();
+      }
+    }
+  } finally {
+    contacts.delete();
   }
   return [...new Set(names)];
 }
@@ -64,22 +74,9 @@ function contactNames(mujoco, model, data) {
 function armYellowContactNames(mujoco, model, data, armBodyIds) {
   const bodyType = mujoco.mjtObj.mjOBJ_BODY.value;
   const yellowBodyId = mujoco.mj_name2id(model, bodyType, 'yellow_cylinder');
-  const geomType = mujoco.mjtObj.mjOBJ_GEOM.value;
-  const names = [];
-  const count = Math.min(data.ncon, data.contact.size());
-  for (let index = 0; index < count; index += 1) {
-    const contact = data.contact.get(index);
-    if (!contact) continue;
-    const body1 = model.geom_bodyid[contact.geom1];
-    const body2 = model.geom_bodyid[contact.geom2];
-    const yellowInvolved = body1 === yellowBodyId || body2 === yellowBodyId;
-    const otherBody = body1 === yellowBodyId ? body2 : body1;
-    if (!yellowInvolved || !armBodyIds.has(otherBody)) continue;
-    const geom1 = mujoco.mj_id2name(model, geomType, contact.geom1) || `geom#${contact.geom1}`;
-    const geom2 = mujoco.mj_id2name(model, geomType, contact.geom2) || `geom#${contact.geom2}`;
-    names.push(`${geom1}<->${geom2}`);
-  }
-  return [...new Set(names)];
+  return contactNames(mujoco, model, data, (body1, body2) =>
+    (body1 === yellowBodyId && armBodyIds.has(body2)) ||
+    (body2 === yellowBodyId && armBodyIds.has(body1)));
 }
 
 async function compileVariant(mujoco, variant) {

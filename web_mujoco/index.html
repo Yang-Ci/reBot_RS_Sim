@@ -155,6 +155,7 @@
         </div>
         <div class="grasp-actions">
           <button type="button" id="start-grasp" data-i18n="grasp.start">▶ Put away</button>
+          <button type="button" id="start-yolo-grasp" data-i18n="grasp.yoloStart" hidden>YOLO grasp</button>
           <button type="button" id="start-stack" data-i18n="grasp.stack">▲ Stack</button>
           <button type="button" id="cancel-grasp" disabled data-i18n="grasp.cancel">Stop</button>
         </div>
@@ -163,6 +164,8 @@
           <output id="grasp-progress-value">0%</output>
         </div>
         <p class="grasp-stage"><span data-i18n="grasp.stageLabel">Stage</span><strong id="grasp-stage" aria-live="polite" data-i18n="grasp.stage.idle">Ready</strong></p>
+        <p class="control-hint" id="yolo-grasp-status" aria-live="polite" hidden></p>
+        <canvas id="yolo-grasp-preview" width="640" height="480" style="width: 100%; height: auto; max-width: 320px" hidden></canvas>
       </section>
       <section class="control-card telemetry-controls" id="telemetry-controls" aria-labelledby="telemetry-title">
         <div class="control-card-heading">
