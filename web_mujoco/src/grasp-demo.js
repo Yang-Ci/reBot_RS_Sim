@@ -583,16 +583,17 @@ export function createGraspDemo({
     const request = new AbortController();
     observationRequest = request;
     const requestedAt = data.time;
+    const previous = pickupObservation;
     // Hold the arm at the reached high pose while inference is pending.
     physics.setTargets(currentArmPose());
     enter('reobserving');
     const timeout = setTimeout(() => {
       if (observationRequest === request && running) fail('vision-unreliable');
     }, 12000);
-    Promise.resolve().then(() => reobserveGrasp(selectedId, request.signal)).then((observed) => {
+    Promise.resolve().then(() => reobserveGrasp(selectedId, request.signal, previous.position)).then((observed) => {
       if (observationRequest !== request || !running) return;
       const reason = request.signal.aborted ? 'vision-unreliable' :
-        validateGraspReobservation(pickupObservation, observed, selected().graspYawPeriod, requestedAt, performance.now(), data.time);
+        validateGraspReobservation(previous, observed, selected().graspYawPeriod, requestedAt, performance.now(), data.time);
       if (reason) { fail(reason); return; }
       observationRequest = null;
       pickupObservation = observed;

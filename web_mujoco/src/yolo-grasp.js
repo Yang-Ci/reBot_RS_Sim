@@ -1,10 +1,12 @@
 import { paintCameraFrame } from './camera-sampler.js';
+import { MAX_GRASP_REOBSERVATION_SHIFT } from './grasp-reobservation.js';
 import { pixelToWorld } from './rgbd-perception.js';
 import { detectYolo, initializeYolo } from './yolo-browser-runtime.js';
 
 const FRAME_SIZE = { width: 640, height: 480 };
 const TABLE_HEIGHT = 0.10;
 const MIN_CONFIDENCE = 0.40;
+const MIN_REOBSERVATION_CONFIDENCE = 0.35;
 const SHAPES = {
   red: { length: 0.045, width: 0.045, height: 0.045 },
   blue: { length: 0.052, width: 0.032, height: 0.038 },
@@ -82,7 +84,7 @@ function measuredPose(frame, detection) {
     yaw: shape.round ? 0 : fit.yaw, confidence: detection.confidence };
 }
 
-export async function observeYoloGrasp(view, id, signal, preview) {
+export async function observeYoloGrasp(view, id, signal, preview, previousPosition) {
   await initializeYolo(signal);
   const capturedAtMs = performance.now();
   const frame = await view.captureCamera('overhead', { ...FRAME_SIZE, asyncReadback: true });
@@ -92,11 +94,19 @@ export async function observeYoloGrasp(view, id, signal, preview) {
   canvas.height = frame.height;
   paintCameraFrame(canvas.getContext('2d'), frame);
   const pixels = canvas.getContext('2d').getImageData(0, 0, frame.width, frame.height).data;
-  const detections = await detectYolo(pixels, id, signal);
+  const minConfidence = previousPosition ? MIN_REOBSERVATION_CONFIDENCE : MIN_CONFIDENCE;
+  const detections = await detectYolo(pixels, id, signal, minConfidence);
   signal.throwIfAborted();
-  const candidates = detections.filter(item => item.id === id && Number.isFinite(item.confidence) && item.confidence >= MIN_CONFIDENCE)
+  const candidates = detections.filter(item => item.id === id && Number.isFinite(item.confidence) && item.confidence >= minConfidence)
     .map(item => ({ detection: item, pose: measuredPose(frame, item) })).filter(item => item.pose);
-  const selected = candidates.length === 1 ? candidates[0] : null;
+  const confirmed = candidates.filter(({ pose }) => pose.confidence >= MIN_CONFIDENCE);
+  // Use the lower threshold only to reacquire a previously confirmed target
+  // nearby. The grasp still validates the fresh frame and full pose change.
+  const eligible = previousPosition && confirmed.length === 0
+    ? candidates.filter(({ pose }) => Math.hypot(pose.position.x - previousPosition.x,
+      pose.position.y - previousPosition.y) <= MAX_GRASP_REOBSERVATION_SHIFT)
+    : confirmed;
+  const selected = eligible.length === 1 ? eligible[0] : null;
 
   if (preview) {
     preview.width = frame.width;

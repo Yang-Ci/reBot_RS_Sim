@@ -643,9 +643,9 @@ async function main() {
       y: view.camera.position.y,
       z: view.camera.position.z
     }),
-    reobserveGrasp: async (id, signal) => {
+    reobserveGrasp: async (id, signal, previousPosition) => {
       yoloGraspStatusEl.textContent = t('grasp.yoloReobserving');
-      const observation = await observeYoloGrasp(view, id, signal, yoloGraspPreviewEl);
+      const observation = await observeYoloGrasp(view, id, signal, yoloGraspPreviewEl, previousPosition);
       if (observation && !signal.aborted) {
         yoloGraspStatusEl.textContent = t('grasp.yoloPose', {
           confidence: Math.round(observation.confidence * 100),

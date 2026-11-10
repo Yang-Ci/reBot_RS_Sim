@@ -36,4 +36,5 @@ function request(type, signal, extra = {}, transfer = []) {
 }
 
 export const initializeYolo = signal => request('init', signal);
-export const detectYolo = (pixels, target, signal) => request('detect', signal, { pixels, target }, [pixels.buffer]);
+export const detectYolo = (pixels, target, signal, minConfidence) =>
+  request('detect', signal, { pixels, target, minConfidence }, [pixels.buffer]);

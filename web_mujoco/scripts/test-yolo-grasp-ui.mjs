@@ -20,15 +20,16 @@ try {
   const status = page.locator('#yolo-grasp-status');
   const select = id => page.locator(`#vision-targets [data-target="${id}"]`).click();
 
-  for (const id of ['blue', 'red', 'yellow']) {
+  for (const { id, keys = '', expected } of [
+    { id: 'blue', keys: 'wwa', expected: [370, 75] },
+    { id: 'red' },
+    { id: 'yellow' },
+    // The arm changes the second camera image enough to put YOLOE just below 40%.
+    { id: 'yellow', keys: 'wwwwaaaa', expected: [390, -140] }
+  ]) {
     await page.locator('#reset').click();
     await select(id);
-    if (id === 'blue') {
-      // Move the block 30 mm forward and 15 mm left via the actual editor.
-      await page.keyboard.press('w');
-      await page.keyboard.press('w');
-      await page.keyboard.press('a');
-    }
+    for (const key of keys) await page.keyboard.press(key);
     await start.click();
     await page.waitForFunction(() => {
       const text = document.getElementById('yolo-grasp-status').textContent;
@@ -36,9 +37,9 @@ try {
     }, null, { timeout: 120000 });
     const message = await status.textContent();
     assert.match(message, /^YOLOE \d+%/, `${id}: ${message}`);
-    if (id === 'blue') {
+    if (expected) {
       const position = message.match(/X (\d+) mm · Y (-?\d+) mm/);
-      assert(position && Math.abs(Number(position[1]) - 370) < 8 && Math.abs(Number(position[2]) - 75) < 8,
+      assert(position && Math.abs(Number(position[1]) - expected[0]) < 8 && Math.abs(Number(position[2]) - expected[1]) < 8,
         `Observed pose should follow the moved block: ${message}`);
     }
     await page.waitForFunction(() => document.getElementById('grasp-progress').value === 1, null, { timeout: 45000 });
@@ -52,7 +53,7 @@ try {
   }
 
   assert.deepEqual(errors, []);
-  console.log('Three browser YOLO grasps completed with no page errors');
+  console.log('Four browser YOLO grasps completed with no page errors');
 } finally {
   await browser.close();
 }

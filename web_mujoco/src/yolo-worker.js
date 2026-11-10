@@ -46,7 +46,7 @@ function decodeMask(candidate, predictions, prototypes) {
   return { left, top, width, height, data };
 }
 
-async function detect(pixels, target) {
+async function detect(pixels, target, minConfidence) {
   const model = await session();
   const rgb = new Float32Array(3 * SIZE * SIZE);
   rgb.fill(114 / 255);
@@ -75,14 +75,14 @@ async function detect(pixels, target) {
   for (const candidate of candidates) {
     if (!kept.some(other => iou(candidate.box, other.box) > .5)) kept.push(candidate);
   }
-  return kept.filter(item => item.id === target && item.confidence >= .40)
+  return kept.filter(item => item.id === target && item.confidence >= minConfidence)
     .map(item => ({ id: item.id, confidence: item.confidence, box: item.box,
       mask: decodeMask(item, predictions, proto.data) }));
 }
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') await session();
-    const detections = data.type === 'detect' ? await detect(data.pixels, data.target) : undefined;
+    const detections = data.type === 'detect' ? await detect(data.pixels, data.target, data.minConfidence) : undefined;
     self.postMessage({ id: data.id, detections });
   } catch (error) { self.postMessage({ id: data.id, error: error?.message || String(error) }); }
 };
