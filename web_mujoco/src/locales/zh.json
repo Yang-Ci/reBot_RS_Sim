@@ -130,6 +130,8 @@
   "grasp.yoloUnavailable": "无法加载视觉模型或读取相机。",
   "grasp.yoloPose": "YOLOE {confidence}% · X {x} mm · Y {y} mm · 朝向 {yaw}°",
   "grasp.yoloReobserving": "正在重新观察目标…",
+  "grasp.yoloConfidenceInitial": "首次识别 · 所选类别整帧最高分 {confidence}% · 门槛 {threshold}%（可能来自背景）",
+  "grasp.yoloConfidenceRecheck": "复拍识别 · 所选类别整帧最高分 {confidence}% · 门槛 {threshold}%（可能来自背景）",
   "grasp.vision-unreliable": "已停止抓取：新观测不可用、不可靠或已过期。",
   "grasp.vision-moved": "已停止抓取：目标位移过大。",
   "grasp.vision-orientation": "已停止抓取：目标朝向变化过大。",

@@ -21,7 +21,7 @@ function request(type, signal, extra = {}, transfer = []) {
         return;
       }
       pending.delete(data.id);
-      request.resolve(data.detections);
+      request.resolve(data.result);
     };
     worker.onerror = () => stopWorker(new Error('YOLO worker failed'));
   }

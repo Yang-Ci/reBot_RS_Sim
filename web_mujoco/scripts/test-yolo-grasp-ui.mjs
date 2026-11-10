@@ -22,6 +22,8 @@ try {
 
   for (const { id, keys = '', expected } of [
     { id: 'blue', keys: 'wwa', expected: [370, 75] },
+    // The transparent IK target overlaps the blue block in the depth image.
+    { id: 'blue', keys: 'sdddd', expected: [325, 0] },
     { id: 'red' },
     { id: 'yellow' },
     // The arm changes the second camera image enough to put YOLOE just below 40%.
@@ -45,6 +47,8 @@ try {
     await page.waitForFunction(() => document.getElementById('grasp-progress').value === 1, null, { timeout: 45000 });
     const stage = await page.locator('#grasp-stage').textContent();
     assert.equal(stage, 'Grasp complete', `${id}: ${message}; ${stage} (${await page.locator('#grasp-stage').getAttribute('data-message')})`);
+    assert.match(await page.locator('#yolo-grasp-confidence-initial').textContent(), /\d+\.\d%/);
+    assert.match(await page.locator('#yolo-grasp-confidence-recheck').textContent(), /\d+\.\d%/);
     console.log(`${id}: ${message} · ${stage}`);
     if (id === 'blue') {
       await mkdir('.reports/yolo-grasp', { recursive: true });
@@ -52,8 +56,16 @@ try {
     }
   }
 
+  await page.locator('#reset').click();
+  await select('yellow');
+  for (const key of 'wwwwwaaaa') await page.keyboard.press(key);
+  await start.click();
+  await page.waitForFunction(() => document.getElementById('yolo-grasp-status').textContent.startsWith('No reliable'), null, { timeout: 120000 });
+  assert.match(await page.locator('#yolo-grasp-confidence-initial').textContent(), /\d+\.\d%/);
+  assert(await page.locator('#yolo-grasp-confidence-recheck').isHidden());
+
   assert.deepEqual(errors, []);
-  console.log('Four browser YOLO grasps completed with no page errors');
+  console.log('Five browser YOLO grasps completed with no page errors');
 } finally {
   await browser.close();
 }

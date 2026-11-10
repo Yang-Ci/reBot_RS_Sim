@@ -57,6 +57,8 @@ const visionTargetsEl = document.getElementById('vision-targets');
 const startGraspEl = document.getElementById('start-grasp');
 const startYoloGraspEl = document.getElementById('start-yolo-grasp');
 const yoloGraspStatusEl = document.getElementById('yolo-grasp-status');
+const yoloGraspConfidenceInitialEl = document.getElementById('yolo-grasp-confidence-initial');
+const yoloGraspConfidenceRecheckEl = document.getElementById('yolo-grasp-confidence-recheck');
 const yoloGraspPreviewEl = document.getElementById('yolo-grasp-preview');
 const startStackEl = document.getElementById('start-stack');
 const cancelGraspEl = document.getElementById('cancel-grasp');
@@ -645,7 +647,13 @@ async function main() {
     }),
     reobserveGrasp: async (id, signal, previousPosition) => {
       yoloGraspStatusEl.textContent = t('grasp.yoloReobserving');
-      const observation = await observeYoloGrasp(view, id, signal, yoloGraspPreviewEl, previousPosition);
+      const observation = await observeYoloGrasp(view, id, signal, yoloGraspPreviewEl, previousPosition,
+        (confidence, threshold) => {
+          yoloGraspConfidenceRecheckEl.hidden = false;
+          yoloGraspConfidenceRecheckEl.textContent = t('grasp.yoloConfidenceRecheck', {
+            confidence: (confidence * 100).toFixed(1), threshold: Math.round(threshold * 100)
+          });
+        });
       if (observation && !signal.aborted) {
         yoloGraspStatusEl.textContent = t('grasp.yoloPose', {
           confidence: Math.round(observation.confidence * 100),
@@ -927,10 +935,18 @@ async function main() {
     const timeout = setTimeout(() => request.abort(), 120000);
     yoloGraspStatusEl.hidden = false;
     yoloGraspStatusEl.textContent = t('grasp.yoloScanning');
+    yoloGraspConfidenceInitialEl.hidden = true;
+    yoloGraspConfidenceRecheckEl.hidden = true;
     yoloGraspPreviewEl.hidden = true;
     renderGraspControls();
     try {
-      const observed = await observeYoloGrasp(view, target, request.signal, yoloGraspPreviewEl);
+      const observed = await observeYoloGrasp(view, target, request.signal, yoloGraspPreviewEl, undefined,
+        (confidence, threshold) => {
+          yoloGraspConfidenceInitialEl.hidden = false;
+          yoloGraspConfidenceInitialEl.textContent = t('grasp.yoloConfidenceInitial', {
+            confidence: (confidence * 100).toFixed(1), threshold: Math.round(threshold * 100)
+          });
+        });
       if (yoloRequest !== request || request.signal.aborted) return;
       if (!observed || performance.now() - observed.capturedAtMs > MAX_GRASP_FRAME_AGE_MS || !graspDemo.start(target, observed)) {
         yoloGraspStatusEl.textContent = t('grasp.yoloNoPose');
@@ -965,6 +981,8 @@ async function main() {
   if (yoloEnabled) resetEl.addEventListener('click', () => {
     stopYoloRequest();
     yoloGraspStatusEl.hidden = true;
+    yoloGraspConfidenceInitialEl.hidden = true;
+    yoloGraspConfidenceRecheckEl.hidden = true;
     yoloGraspPreviewEl.hidden = true;
   });
   toggleContactVisualsEl?.addEventListener('click', () => {

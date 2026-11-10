@@ -60,7 +60,10 @@ async function detect(pixels, target, minConfidence) {
   const out = result[model.outputNames[0]], proto = result[model.outputNames[1]];
   if (out.dims.join(',') !== '1,39,8400' || proto.dims.join(',') !== '1,32,160,160') throw new Error('Unexpected YOLOE output shape');
   const predictions = out.data, candidates = [];
+  const targetIndex = IDS.indexOf(target);
+  let highestConfidence = 0;
   for (let i = 0; i < COUNT; i++) {
+    if (targetIndex >= 0) highestConfidence = Math.max(highestConfidence, predictions[(4 + targetIndex) * COUNT + i]);
     let cls = 0, confidence = predictions[4 * COUNT + i];
     for (let c = 1; c < 3; c++) if (predictions[(4 + c) * COUNT + i] > confidence) {
       cls = c; confidence = predictions[(4 + c) * COUNT + i];
@@ -75,14 +78,15 @@ async function detect(pixels, target, minConfidence) {
   for (const candidate of candidates) {
     if (!kept.some(other => iou(candidate.box, other.box) > .5)) kept.push(candidate);
   }
-  return kept.filter(item => item.id === target && item.confidence >= minConfidence)
+  const detections = kept.filter(item => item.id === target && item.confidence >= minConfidence)
     .map(item => ({ id: item.id, confidence: item.confidence, box: item.box,
       mask: decodeMask(item, predictions, proto.data) }));
+  return { detections, highestConfidence };
 }
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') await session();
-    const detections = data.type === 'detect' ? await detect(data.pixels, data.target, data.minConfidence) : undefined;
-    self.postMessage({ id: data.id, detections });
+    const result = data.type === 'detect' ? await detect(data.pixels, data.target, data.minConfidence) : undefined;
+    self.postMessage({ id: data.id, result });
   } catch (error) { self.postMessage({ id: data.id, error: error?.message || String(error) }); }
 };

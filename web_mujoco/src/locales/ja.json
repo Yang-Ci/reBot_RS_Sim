@@ -130,6 +130,8 @@
   "grasp.yoloUnavailable": "画像モデルまたはカメラを読み取れません。",
   "grasp.yoloPose": "YOLOE {confidence}% · X {x} mm · Y {y} mm · 角度 {yaw}°",
   "grasp.yoloReobserving": "ターゲットを再観測中…",
+  "grasp.yoloConfidenceInitial": "初回認識 · 選択クラスの画像内最高スコア {confidence}% · 閾値 {threshold}%（背景の可能性あり）",
+  "grasp.yoloConfidenceRecheck": "再観測 · 選択クラスの画像内最高スコア {confidence}% · 閾値 {threshold}%（背景の可能性あり）",
   "grasp.vision-unreliable": "把持を停止しました。新しい観測が利用できない、不確実、または古すぎます。",
   "grasp.vision-moved": "把持を停止しました。ターゲットの移動が大きすぎます。",
   "grasp.vision-orientation": "把持を停止しました。ターゲットの向きの変化が大きすぎます。",

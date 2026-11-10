@@ -72,10 +72,22 @@ export function createCameraSampler(renderer, scene,{prepareScene}={}) {
       renderer.setRenderTarget(buffer.colour); renderer.render(scene, sensorCamera);
       read(buffer.colour,buffer.rgb);
       if (withDepth) {
+        // Override materials make the transparent IK control aid opaque.
+        const hiddenHelpers = [];
+        scene.traverse(object => {
+          if (object.visible && object.userData.bodyName === 'ik_target') {
+            hiddenHelpers.push(object);
+            object.visible = false;
+          }
+        });
         scene.overrideMaterial = depthMaterial; scene.background = null;
         renderer.toneMapping = THREE.NoToneMapping; renderer.setClearColor(0xffffff, 1);
-        renderer.setRenderTarget(buffer.depth); renderer.render(scene, sensorCamera);
-        read(buffer.depth,buffer.packed);
+        try {
+          renderer.setRenderTarget(buffer.depth); renderer.render(scene, sensorCamera);
+          read(buffer.depth,buffer.packed);
+        } finally {
+          hiddenHelpers.forEach(object => { object.visible = true; });
+        }
       }
       submittedMs=performance.now()-began;
       return asyncReadback?Promise.all(reads).then(finish):finish();
