@@ -1,3 +1,4 @@
+import {fetchModelResource, abortable} from './model-download.js';
 import {parseIncludesAndMeshes,extractMaterialProps} from './model-source.js';
 import {createModelFileStore} from './model-file-store.js';
 import {unpackStl} from './stl-transfer.js';
@@ -54,40 +55,30 @@ export async function loadMujocoModule() {
   }
 }
 
-async function fetchBytes(url, onChunk) {
-  const response = await fetch(url, { cache: 'default' });
-  if (!response.ok) {
-    throw new Error(`无法读取 ${url}（HTTP ${response.status}）`);
-  }
-  const total = Number(response.headers.get('content-length')) || 0;
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  onChunk?.(bytes.byteLength, total || bytes.byteLength);
-  return bytes;
-}
-
 async function decompressGzip(bytes) {
   if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-async function fetchModelBytes(relative, onChunk) {
+async function fetchModelBytes(relative, onChunk, options) {
   const compressed = SUPPORTS_GZIP_STREAM && isMeshFile(relative);
   if(compressed&&!import.meta.env.DEV&&USE_PACKED_MESHES&&PACKED_MESH_FILES[relative]) {
     try {
-      const packed=await fetchBytes(modelUrl(relative,true,true),onChunk);
+      const packed=await fetchModelResource(modelUrl(relative,true,true), {...options, onProgress:onChunk});
       return {bytes:unpackStl(await decompressGzip(packed)),transferred:packed.byteLength};
-    } catch(error) {console.warn(`紧凑模型读取失败，回退 gzip 资源：${relative}`,error);}
+    } catch(error) {options.signal.throwIfAborted();console.warn(`紧凑模型读取失败，回退 gzip 资源：${relative}`,error);}
   }
   if (compressed) {
     try {
-      const packed = await fetchBytes(modelUrl(relative, true), onChunk);
+      const packed = await fetchModelResource(modelUrl(relative, true), {...options, onProgress:onChunk});
       return { bytes: await decompressGzip(packed), transferred: packed.byteLength };
     } catch (error) {
+      options.signal.throwIfAborted();
       console.warn(`压缩模型读取失败，回退原始资源：${relative}`, error);
     }
   }
-  const bytes = await fetchBytes(modelUrl(relative), onChunk);
+  const bytes = await fetchModelResource(modelUrl(relative), {...options, onProgress:onChunk});
   return { bytes, transferred: bytes.byteLength };
 }
 
@@ -98,8 +89,13 @@ function report(onProgress, key, vars = {}) {
 export async function loadRsScene(
   mujoco,
   onProgress,
-  { sceneXml = DEFAULT_SCENE_XML, fileBackend = new URLSearchParams(globalThis.location?.search||'').get('modelFiles')==='vfs'?'vfs':'auto' } = {}
+  { signal: externalSignal, downloadOptions = {}, sceneXml = DEFAULT_SCENE_XML, fileBackend = new URLSearchParams(globalThis.location?.search||'').get('modelFiles')==='vfs'?'vfs':'auto' } = {}
 ) {
+  const downloadsController = new AbortController();
+  const signal = downloadsController.signal;
+  const cancel = () => downloadsController.abort(externalSignal.reason);
+  externalSignal?.addEventListener('abort', cancel, { once: true });
+  const options = {...downloadOptions, signal};
   const began=performance.now(),startup={format:'xml'};
   // Keep the comparatively expensive WASM startup and model downloads in
   // flight together. Before WASM is ready, buffer at most 16 MiB plus the
@@ -124,7 +120,8 @@ export async function loadRsScene(
   let bufferedBytes = 0;
 
   async function requireRuntime() {
-    const runtime = await mujocoReady;
+    const runtime = await abortable(mujocoReady, signal);
+    signal.throwIfAborted();
     if (runtime.error) throw runtime.error;
     if (!fileStore) fileStore = createModelFileStore(runtime.value,{backend:fileBackend});
     for (const [name, bytes] of bufferedMeshes) fileStore.add(name, bytes);
@@ -134,6 +131,7 @@ export async function loadRsScene(
   }
 
   try {
+    externalSignal?.throwIfAborted();
     // Resolve the small XML dependency graph first so every mesh is known
     // before starting the parallel download pool.
     while (xmlQueue.length) {
@@ -144,7 +142,7 @@ export async function loadRsScene(
       const { bytes, transferred } = await fetchModelBytes(relative, (received, total) => {
         const mb = total ? `${(received / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB` : '';
         report(onProgress, 'status.downloadProgress', { file: relative, mb });
-      });
+      }, options);
       files[relative] = bytes;
       loadedBytes += bytes.byteLength;
       transferredBytes += transferred;
@@ -188,7 +186,7 @@ export async function loadRsScene(
         const { bytes, transferred } = await fetchModelBytes(relative, (received) => {
           activeBytes.set(relative, received);
           reportAssetProgress();
-        });
+        }, options);
         activeBytes.delete(relative);
         if (runtimeReady) {
           await requireRuntime();
@@ -207,7 +205,10 @@ export async function loadRsScene(
 
     const workerCount = Math.min(DOWNLOAD_CONCURRENCY, pending.length);
     // Let in-flight workers finish before deleting their shared files on error.
-    const downloads = await Promise.allSettled(Array.from({ length: workerCount }, () => downloadWorker()));
+    const downloads = await Promise.allSettled(Array.from({ length: workerCount }, () => downloadWorker().catch(error => {
+      downloadsController.abort(error);
+      throw error;
+    })));
     const failed = downloads.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;
     startup.assetsReadyMs=performance.now()-began;
@@ -228,6 +229,8 @@ export async function loadRsScene(
     startup.fileBackend=fileStore.statistics.backend;startup.fileWriteMs=fileStore.statistics.writeMs;
     return { mujoco: resolvedMujoco, model, data, loadedBytes, files: [...seen], materialProps,startup };
   } finally {
+    externalSignal?.removeEventListener('abort', cancel);
+    downloadsController.abort();
     bufferedMeshes.clear();
     fileStore?.dispose();
   }

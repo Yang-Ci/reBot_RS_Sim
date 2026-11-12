@@ -248,10 +248,14 @@ for (const id of Object.keys(views)) $(id).addEventListener('click', () => selec
 
 async function main() {
   const bootBegan=performance.now();
+  const loadingController = new AbortController();
+  const cancelLoading = () => loadingController.abort();
+  window.addEventListener('pagehide', cancelLoading, { once: true });
   const { mujoco, model, data, materialProps,startup } = await loadRsScene(loadMujocoModule(), (progress) => {
     const vars = progress.vars || {};
     $('dual-loading-text').textContent = vars.total ? `下载模型 ${vars.done} / ${vars.total} · ${vars.mb} MB` : progress.key === 'status.compiling' ? '编译双臂物理场景…' : '准备 MuJoCo 运行环境…';
-  }, { sceneXml: MODEL_VARIANTS.dual.sceneXml });
+  }, { sceneXml: MODEL_VARIANTS.dual.sceneXml, signal: loadingController.signal })
+    .finally(() => window.removeEventListener('pagehide', cancelLoading));
   const viewBegan=performance.now();
   view = createSceneView($('dual-viewport'), {...MODEL_VARIANTS.dual.view,
     meshDetail:import.meta.env.DEV&&new URLSearchParams(location.search).get('meshDetail')==='full'?'full':'balanced'});

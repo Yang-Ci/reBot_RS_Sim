@@ -442,12 +442,15 @@ onLangChange(() => {
 
 async function main() {
   setLoadProgress('status.loadingWasm');
+  const loadingController = new AbortController();
+  const cancelLoading = () => loadingController.abort();
+  window.addEventListener('pagehide', cancelLoading, { once: true });
   const mujocoPromise = loadMujocoModule();
   const { mujoco, model, data, files, materialProps } = await loadRsScene(
     mujocoPromise,
     setLoadProgress,
-    { sceneXml: modelVariant.sceneXml }
-  );
+    { sceneXml: modelVariant.sceneXml, signal: loadingController.signal }
+  ).finally(() => window.removeEventListener('pagehide', cancelLoading));
   // Renderer, PMREM and lighting initialization are deliberately deferred so
   // they do not block the WASM and model requests on the first load.
   const view = createSceneView(viewportEl, modelVariant.view);

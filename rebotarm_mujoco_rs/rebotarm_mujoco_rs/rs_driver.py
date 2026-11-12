@@ -147,7 +147,7 @@ class RsDriver(Node):
     def _joint_command_callback(self, index: int):
         def callback(msg: JointPosVelCmd) -> None:
             with self._lock:
-                if not self.enabled:
+                if not self.enabled or not math.isfinite(float(msg.pos)):
                     return
                 lower, upper = _JOINT_LIMITS[index]
                 self.targets[index] = self._clamp(float(msg.pos), lower, upper)
@@ -156,68 +156,75 @@ class RsDriver(Node):
 
     def _gripper_command_callback(self, msg: JointPosVelCmd) -> None:
         with self._lock:
-            if self.enabled:
+            if self.enabled and math.isfinite(float(msg.pos)):
                 self.gripper_target = self._clamp(
                     float(msg.pos), 0.0, self.gripper_open_position
                 )
 
     def _enable(self, _request, response):
-        self.enabled = True
-        self._publish_status()
+        with self._lock:
+            self.enabled = True
+            self.last_time = self.get_clock().now()
+            self._publish_status()
         response.success = True
-        response.message = "RS driver enabled"
+        response.message = "RS driver enabled; awaiting fresh commands"
         return response
 
+    def _hold_position(self) -> None:
+        # Discard pending motion so enabling cannot resume an old target.
+        self.targets = list(self.positions)
+        self.gripper_target = self.gripper_position
+        self.velocities = [0.0] * len(_ARM_JOINTS)
+        self.gripper_velocity = 0.0
+
     def _disable(self, _request, response):
-        self.enabled = False
-        self._publish_status()
+        with self._lock:
+            self.enabled = False
+            self._hold_position()
+            self._publish_status()
         response.success = True
-        response.message = "RS driver disabled"
+        response.message = "RS driver disabled; holding current position"
         return response
 
     def _safe_home(self, _request, response):
         with self._lock:
-            self.targets = [0.0] * len(_ARM_JOINTS)
-            self.gripper_target = 0.0
-        response.success = True
-        response.message = "RS driver safe-home accepted"
+            response.success = self.enabled
+            if self.enabled:
+                self.targets = [0.0] * len(_ARM_JOINTS)
+                self.gripper_target = 0.0
+        response.message = (
+            "RS driver safe-home accepted" if response.success else "RS driver disabled"
+        )
+        return response
+
+    def _set_gripper_target(self, position, response):
+        with self._lock:
+            response.success = self.enabled and math.isfinite(float(position))
+            if response.success:
+                self.gripper_target = self._clamp(
+                    float(position), 0.0, self.gripper_open_position
+                )
+            response.reached_position = float(self.gripper_target)
         return response
 
     def _set_gripper(self, request, response):
-        with self._lock:
-            if self.enabled:
-                self.gripper_target = self._clamp(
-                    float(request.position), 0.0, self.gripper_open_position
-                )
-        response.success = self.enabled
-        response.reached_position = float(self.gripper_target)
-        return response
+        return self._set_gripper_target(request.position, response)
 
     def _open_gripper(self, request, response):
-        target = (
-            float(request.position)
-            if request.position != 0.0
-            else self.gripper_open_position
+        target = request.position if request.position != 0.0 else self.gripper_open_position
+        self._set_gripper_target(target, response)
+        response.message = (
+            "RS driver gripper open accepted" if response.success
+            else "RS driver disabled or invalid gripper position"
         )
-        with self._lock:
-            if self.enabled:
-                self.gripper_target = self._clamp(
-                    target, 0.0, self.gripper_open_position
-                )
-        response.success = self.enabled
-        response.reached_position = float(self.gripper_target)
-        response.message = "RS driver gripper open accepted"
         return response
 
     def _close_gripper(self, request, response):
-        with self._lock:
-            if self.enabled:
-                self.gripper_target = self._clamp(
-                    float(request.position), 0.0, self.gripper_open_position
-                )
-        response.success = self.enabled
-        response.reached_position = float(self.gripper_target)
-        response.message = "RS driver gripper close accepted"
+        self._set_gripper_target(request.position, response)
+        response.message = (
+            "RS driver gripper close accepted" if response.success
+            else "RS driver disabled or invalid gripper position"
+        )
         return response
 
     def _tick(self) -> None:
@@ -225,6 +232,10 @@ class RsDriver(Node):
         dt = max((now - self.last_time).nanoseconds / 1e9, 0.001)
         self.last_time = now
         with self._lock:
+            if not self.enabled:
+                self._hold_position()
+                self._publish_states(now)
+                return
             for index in range(len(_ARM_JOINTS)):
                 before = self.positions[index]
                 self.positions[index] = self._step_towards(
@@ -300,6 +311,8 @@ class RsDriver(Node):
 
     @staticmethod
     def _clamp(value: float, lower: float, upper: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("Joint/gripper position must be finite")
         return max(lower, min(upper, value))
 
 

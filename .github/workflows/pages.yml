@@ -28,6 +28,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web_mujoco/package-lock.json
+      - name: Verify driver stop, input validation and task ownership
+        run: python3 -B -m unittest discover -s rebotarm_mujoco_rs/test -p test_control_safety.py -v
       - name: Install dependencies
         working-directory: web_mujoco
         run: npm ci

@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
     "smoke": "node scripts/smoke-load.mjs",
-    "test:loading": "node scripts/test-mesh-transfer.mjs && node scripts/test-model-file-store.mjs && node scripts/test-loading.mjs",
+    "test:loading": "node scripts/test-model-download.mjs && node scripts/test-mesh-transfer.mjs && node scripts/test-model-file-store.mjs && node scripts/test-loading.mjs",
     "test:delivery": "node scripts/test-runtime-delivery.mjs",
     "test:reset": "node scripts/test-reset.mjs",
     "test:dual": "node scripts/test-dual.mjs",

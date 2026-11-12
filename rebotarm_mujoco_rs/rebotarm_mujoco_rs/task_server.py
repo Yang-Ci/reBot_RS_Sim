@@ -163,6 +163,9 @@ class RsTaskServer(Node):
         self._joint_state_received = False
         self._last_target = np.zeros(3, dtype=np.float64)
         self._cancel = threading.Event()
+        self._motion_lock = threading.Lock()
+        self._motion_busy = False
+        self._active_goal = None
         self._recording = False
         self._record_started = 0.0
         self._record_samples: list[dict[str, float]] = []
@@ -223,6 +226,7 @@ class RsTaskServer(Node):
             f"/{self.namespace}/move_to_pose",
             execute_callback=self._execute_move,
             goal_callback=self._accept_goal,
+            handle_accepted_callback=self._handle_accepted,
             cancel_callback=self._accept_cancel,
             callback_group=self.callback_group,
         )
@@ -232,6 +236,7 @@ class RsTaskServer(Node):
             f"/{self.namespace}/follow_joint_trajectory",
             execute_callback=self._execute_trajectory,
             goal_callback=self._accept_goal,
+            handle_accepted_callback=self._handle_accepted,
             cancel_callback=self._accept_cancel,
             callback_group=self.callback_group,
         )
@@ -316,12 +321,41 @@ class RsTaskServer(Node):
             self.base_qpos[address : address + 3] = position
             self.base_qpos[address + 3 : address + 7] = quat / norm
 
-    @staticmethod
-    def _accept_goal(_request):
-        return GoalResponse.ACCEPT
+    def _reserve_motion(self) -> bool:
+        # Reserve before accepting a goal or starting a replay thread, including
+        # time spent queued in the executor, solving IK and waiting to settle.
+        with self._motion_lock:
+            if self._motion_busy:
+                return False
+            self._motion_busy = True
+            self._active_goal = None
+            self._cancel.clear()
+            return True
 
-    def _accept_cancel(self, _goal_handle):
-        self._cancel.set()
+    def _release_motion(self) -> None:
+        with self._motion_lock:
+            self._active_goal = None
+            self._motion_busy = False
+
+    def _accept_goal(self, _request):
+        return GoalResponse.ACCEPT if self._reserve_motion() else GoalResponse.REJECT
+
+    def _handle_accepted(self, goal_handle):
+        with self._motion_lock:
+            self._active_goal = goal_handle
+        try:
+            goal_handle.execute()
+        except Exception:
+            self._release_motion()
+            raise
+
+    def _accept_cancel(self, goal_handle):
+        with self._motion_lock:
+            if not self._motion_busy or self._active_goal is not goal_handle:
+                return CancelResponse.REJECT
+        # rclpy transitions the handle to CANCELING after this callback returns.
+        # Execution checks that state, avoiding a terminal transition before
+        # the cancellation has been registered by the action server.
         return CancelResponse.ACCEPT
 
     def _handle_ik(self, request, response):
@@ -345,6 +379,12 @@ class RsTaskServer(Node):
         return response
 
     def _execute_move(self, goal_handle):
+        try:
+            return self._execute_move_owned(goal_handle)
+        finally:
+            self._release_motion()
+
+    def _execute_move_owned(self, goal_handle):
         request = goal_handle.request
         target = self._pose_xyz(request.target_pose)
         target_mat = self._pose_matrix(request.target_pose)
@@ -371,13 +411,17 @@ class RsTaskServer(Node):
             goal_handle=goal_handle,
             move_feedback=True,
         )
-        settle_ok, settle_message = self._wait_for_settle(
-            solution, goal_handle=goal_handle
+        settle_ok, settle_message = (
+            self._wait_for_settle(solution, goal_handle=goal_handle)
+            if ok else (False, "RS Cartesian motion canceled")
         )
         ok = ok and settle_ok
         result.final_pose = self._fk_pose_msg(self._current_positions())
         if not ok:
-            goal_handle.canceled()
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
             result.success = False
             result.message = settle_message or "RS Cartesian motion canceled"
             return result
@@ -387,6 +431,12 @@ class RsTaskServer(Node):
         return result
 
     def _execute_trajectory(self, goal_handle):
+        try:
+            return self._execute_trajectory_owned(goal_handle)
+        finally:
+            self._release_motion()
+
+    def _execute_trajectory_owned(self, goal_handle):
         trajectory = goal_handle.request.trajectory
         result = FollowJointTrajectory.Result()
         try:
@@ -400,12 +450,16 @@ class RsTaskServer(Node):
             return result
 
         path_ok = self._run_path(positions, times, goal_handle=goal_handle)
-        settle_ok, settle_message = self._wait_for_settle(
-            positions[-1], goal_handle=goal_handle
+        settle_ok, settle_message = (
+            self._wait_for_settle(positions[-1], goal_handle=goal_handle)
+            if path_ok else (False, "trajectory canceled")
         )
         ok = path_ok and settle_ok
         if not ok:
-            goal_handle.canceled()
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
             result.error_code = FollowJointTrajectory.Result.INVALID_GOAL
             result.error_string = settle_message or "trajectory canceled"
             return result
@@ -451,7 +505,6 @@ class RsTaskServer(Node):
     ) -> bool:
         if len(path) < 2 or len(path) != len(times):
             return True
-        self._cancel.clear()
         period = 1.0 / self.command_hz
         started = time.monotonic()
         total = max(times[-1], period)
@@ -652,22 +705,43 @@ class RsTaskServer(Node):
         return response
 
     def _record_replay(self, _request, response):
-        with self._state_lock:
-            samples = list(self._record_samples)
-            self._recording = False
-        if len(samples) < 2:
+        if not self._reserve_motion():
             response.success = False
-            response.message = "Need at least two RS samples to replay"
+            response.message = "RS motion busy; replay rejected"
             return response
-        path = [np.array([sample[name] for name in _ARM_JOINTS]) for sample in samples]
-        times = [float(sample["t"]) for sample in samples]
-        threading.Thread(target=self._run_path, args=(path, times), daemon=True).start()
+        try:
+            with self._state_lock:
+                samples = list(self._record_samples)
+                if len(samples) < 2:
+                    self._release_motion()
+                    response.success = False
+                    response.message = "Need at least two RS samples to replay"
+                    return response
+                self._recording = False
+            path = [np.array([sample[name] for name in _ARM_JOINTS]) for sample in samples]
+            times = [float(sample["t"]) for sample in samples]
+            threading.Thread(target=self._run_replay, args=(path, times), daemon=True).start()
+        except Exception:
+            self._release_motion()
+            raise
         response.success = True
         response.message = f"Replaying {len(samples)} RS samples"
         return response
 
+    def _run_replay(self, path, times):
+        try:
+            if self._run_path(path, times):
+                self._wait_for_settle(path[-1])
+        except Exception as exc:
+            self.get_logger().error(f"RS replay failed: {exc}")
+        finally:
+            self._release_motion()
+
     def _record_clear(self, _request, response):
-        self._cancel.set()
+        # Serialize cancellation with reservation; a queued task must not erase
+        # this event when it eventually starts running.
+        with self._motion_lock:
+            self._cancel.set()
         with self._state_lock:
             self._recording = False
             self._record_samples = []

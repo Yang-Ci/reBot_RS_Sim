@@ -37,6 +37,27 @@ The RS package now also includes a physics grasp environment with red, blue,
 and yellow objects, overhead and D405-style wrist ROS cameras, object detections, Cartesian IK,
 trajectory actions, and task recording services used by `rebotarm_agent`.
 
+The local `rs_driver` disable service holds the current arm/gripper position,
+zeros feedback velocity and discards pending targets. Commands and safe-home
+are rejected while disabled; re-enabling requires fresh motion commands.
+Non-finite joint/gripper positions (`NaN`, `+Inf`, `-Inf`) are ignored on topics
+and rejected by gripper services.
+
+Cartesian moves, joint trajectories and recorded replays share one motion
+owner. While a task is queued, solving IK, moving or waiting to settle, new
+motion goals/replays are rejected. Cancellation remains set until that task
+exits, including cancellation before execution starts. Completion, failures
+and cancellation release ownership so the next task can run.
+
+Run the control lifecycle regressions without ROS or MuJoCo installed:
+
+```bash
+python3 -B -m unittest discover -s rebotarm_mujoco_rs/test -p test_control_safety.py -v
+```
+
+These tests stub transport/numerical dependencies and exercise the actual
+control callbacks; they do not replace ROS graph or physics integration tests.
+
 Modes:
 
 - `kinematic`: directly synchronizes ROS joint state into MuJoCo.

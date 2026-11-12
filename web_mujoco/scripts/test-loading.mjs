@@ -13,7 +13,8 @@ const source = 'const __PACKED_MESH_FILES__={"meshes/base_link.STL":true};\n'+(a
   .replace("'./wasm-loader.js'", JSON.stringify(new URL('../src/wasm-loader.js', import.meta.url).href))
   .replace("'./model-file-store.js'", JSON.stringify(new URL('../src/model-file-store.js', import.meta.url).href))
   .replace("'./model-source.js'", JSON.stringify(new URL('../src/model-source.js', import.meta.url).href));
-const portableSource=source.replace("'./stl-transfer.js'",JSON.stringify(new URL('../src/stl-transfer.js',import.meta.url).href));
+const withDownloads=source.replace("'./model-download.js'",JSON.stringify(new URL('../src/model-download.js',import.meta.url).href));
+const portableSource=withDownloads.replace("'./stl-transfer.js'",JSON.stringify(new URL('../src/stl-transfer.js',import.meta.url).href));
 const { loadRsScene } = await import(`data:text/javascript;base64,${Buffer.from(portableSource).toString('base64')}`);
 
 async function checkDownloadQueue(meshSize) {
