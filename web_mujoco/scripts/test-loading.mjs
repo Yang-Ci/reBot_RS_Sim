@@ -6,6 +6,7 @@ import loadMujoco from '@mujoco/mujoco';
 import { compileRemoteWasm } from '../src/wasm-loader.js';
 import {packStl} from './pack-stl.mjs';
 import {gzipSync} from 'node:zlib';
+import {parseIncludesAndMeshes} from '../src/model-source.js';
 
 const originalFetch = globalThis.fetch;
 const source = 'const __PACKED_MESH_FILES__={"meshes/base_link.STL":true};\n'+(await readFile(new URL('../src/load-model.js', import.meta.url), 'utf8'))
@@ -82,16 +83,35 @@ try {
   assert(await compileRemoteWasm('https://example.test/slow-but-progressing.wasm',40) instanceof WebAssembly.Module,
     'A progressing response may exceed the inactivity timeout in total');
 
-  // Exercise the production download/file-store pipeline with real scene trees.
+  // Prepare fixture bytes before starting request timers. This suite verifies
+  // scene/file-store equivalence, including synchronous per-byte VFS writes.
+  // On a slow runner those writes can starve pending readFile callbacks for
+  // >8 s. Disk reads/on-demand packing inside fake fetch then look like a
+  // network stall even though no network request exists. Deadline behavior is
+  // covered independently by test-model-download.mjs using controlled byte streams.
+  const sceneCases = [
+    ['rs_grasp_scene.xml',66,'auto'],['rs_agv_scene.xml',92,'auto'],
+    // Includes the coffee machine's visual anchor, body and top.
+    ['rs_dual_tabletop_scene.xml',234,'auto'],['rs_dual_tabletop_scene.xml',234,'vfs']
+  ];
+  const fixtureBytes = new Map();
+  const pendingFixtures = sceneCases.map(([sceneXml]) => sceneXml);
+  while (pendingFixtures.length) {
+    const relative = pendingFixtures.shift();
+    if (fixtureBytes.has(relative)) continue;
+    const bytes = await readFile(new URL(`../../rebotarm_mujoco_rs/models/${relative}`, import.meta.url));
+    fixtureBytes.set(relative, bytes);
+    if (relative.endsWith('.xml')) pendingFixtures.push(...parseIncludesAndMeshes(bytes.toString('utf8')));
+  }
+  fixtureBytes.set('meshes/base_link.STL.stlp1.gzbin',
+    gzipSync(packStl(fixtureBytes.get('meshes/base_link.STL'))));
   const mujoco = await loadMujoco();
   globalThis.fetch = async (url) => {
     const relative = new URL(url, 'https://example.test').pathname.slice('/models/'.length);
-    if(relative.endsWith('.stlp1.gzbin')) {
-      const bytes=await readFile(new URL(`../../rebotarm_mujoco_rs/models/${relative.slice(0,-12)}`,import.meta.url));
-      return new Response(gzipSync(packStl(bytes)));
-    }
-    if (relative.endsWith('.gzbin')) return new Response('', { status: 404 });
-    return new Response(await readFile(new URL(`../../rebotarm_mujoco_rs/models/${relative}`, import.meta.url)));
+    const bytes = fixtureBytes.get(relative);
+    // Missing gzip intentionally exercises raw-mesh fallback. Return a fresh
+    // response per request so body consumption never leaks between scenes.
+    return bytes ? new Response(bytes) : new Response('', { status: 404 });
   };
   const warn = console.warn;
   console.warn = () => {}; // These requests intentionally exercise raw-mesh fallback.
@@ -110,15 +130,12 @@ try {
       for(let i=0;i<100;i++)mujoco.mj_step(model,data);
       return {geometry:hash.digest('hex'),qpos:Array.from(data.qpos),qvel:Array.from(data.qvel),time:data.time};
     }
-    for (const [sceneXml, expectedGeoms, fileBackend] of [
-      ['rs_grasp_scene.xml',66,'auto'],['rs_agv_scene.xml',92,'auto'],
-      // Includes the coffee machine's visual anchor, body and top.
-      ['rs_dual_tabletop_scene.xml',234,'auto'],['rs_dual_tabletop_scene.xml',234,'vfs']
-    ]) {
+    for (const [sceneXml, expectedGeoms, fileBackend] of sceneCases) {
       const { model, data, startup } = await loadRsScene(mujoco, null, { sceneXml,fileBackend });
       try {
         assert.equal(model.ngeom, expectedGeoms);
         assert.equal(startup.fileBackend,fileBackend==='auto'?'memfs':'vfs');
+        console.log(`Loaded ${sceneXml} with ${startup.fileBackend}`);
         assert.deepEqual(roots(),before,'Native source files must be removed after compilation');
         if(sceneXml==='rs_dual_tabletop_scene.xml') {
           const actual=snapshot(model,data);
