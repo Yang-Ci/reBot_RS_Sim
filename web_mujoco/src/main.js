@@ -9,6 +9,7 @@ import { createTcpDrag } from './tcp-drag.js';
 import { createPartExplorer } from './part-explorer.js';
 import { createGraspDemo } from './grasp-demo.js';
 import { observeYoloGrasp } from './yolo-grasp.js';
+import { initializeYolo, isYoloReady } from './yolo-browser-runtime.js';
 import { MAX_GRASP_FRAME_AGE_MS } from './grasp-reobservation.js';
 import { createContactTelemetry } from './contact-telemetry.js';
 import { createTelemetryPanel } from './telemetry-panel.js';
@@ -234,9 +235,34 @@ function finishLoading() {
   loadingComplete = true;
   stopVisualProgressCreep();
   void setVisualProgress(100).then(() => {
-    window.setTimeout(() => loadingOverlayEl?.classList.add('is-hidden'), 80);
+    window.setTimeout(() => {
+      loadingOverlayEl?.classList.add('is-hidden');
+      preloadVisionModel();
+    }, 80);
   });
   void persistAppShell();
+}
+
+function preloadVisionModel() {
+  if (!yoloEnabled) return;
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  window.addEventListener('pagehide', cancel, { once: true });
+  const message = t('grasp.yoloPreloading');
+  // A click/reset can take ownership of this status while initialization runs.
+  const ownsStatus = () => !yoloRequest && !yoloGraspStatusEl.hidden &&
+    yoloGraspStatusEl.textContent === message;
+  if (!yoloRequest) {
+    yoloGraspStatusEl.hidden = false;
+    yoloGraspStatusEl.textContent = message;
+  }
+  void initializeYolo(controller.signal).then(() => {
+    if (ownsStatus()) yoloGraspStatusEl.textContent = t('grasp.yoloReady');
+  }).catch(error => {
+    if (controller.signal.aborted) return;
+    console.warn('Vision model preload failed; grasp can retry:', error);
+    if (ownsStatus()) yoloGraspStatusEl.textContent = t('grasp.yoloPreloadFailed');
+  }).finally(() => window.removeEventListener('pagehide', cancel));
 }
 
 renderLoadProgress();
@@ -934,10 +960,10 @@ async function main() {
     yoloRequest = request;
     physics.setTargets(readAngles(data, joints));
     const target = selectedVisionTarget;
-    // The first observation includes the initial model download and startup.
+    // An early click or a failed background preload can still need startup.
     const timeout = setTimeout(() => request.abort(), 120000);
     yoloGraspStatusEl.hidden = false;
-    yoloGraspStatusEl.textContent = t('grasp.yoloScanning');
+    yoloGraspStatusEl.textContent = t(isYoloReady() ? 'grasp.yoloReadingCamera' : 'grasp.yoloScanning');
     yoloGraspConfidenceInitialEl.hidden = true;
     yoloGraspConfidenceRecheckEl.hidden = true;
     yoloGraspPreviewEl.hidden = true;

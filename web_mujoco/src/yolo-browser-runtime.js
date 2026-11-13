@@ -1,10 +1,12 @@
 let worker = null;
+let ready = false;
 let nextId = 0;
 const pending = new Map();
 
 function stopWorker(reason) {
   worker?.terminate();
   worker = null;
+  ready = false;
   for (const request of pending.values()) request.reject(reason);
   pending.clear();
 }
@@ -35,6 +37,7 @@ function request(type, signal, extra = {}, transfer = []) {
   });
 }
 
-export const initializeYolo = signal => request('init', signal);
+export const isYoloReady = () => ready;
+export const initializeYolo = signal => request('init', signal).then(() => { ready = true; });
 export const detectYolo = (pixels, target, signal, minConfidence) =>
   request('detect', signal, { pixels, target, minConfidence }, [pixels.buffer]);
