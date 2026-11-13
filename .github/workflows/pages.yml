@@ -36,6 +36,9 @@ jobs:
       - name: Install browser for RGB-D verification
         working-directory: web_mujoco
         run: npx playwright install --with-deps chromium
+      - name: Verify vision model caching and recovery
+        working-directory: web_mujoco
+        run: npm run test:yolo-cache
       - name: Verify automatic vision preload and retry
         working-directory: web_mujoco
         run: npm run test:yolo-preload
@@ -77,6 +80,19 @@ jobs:
           GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/
           CLOUDFLARE_WEB_ANALYTICS_TOKEN: ${{ vars.CLOUDFLARE_WEB_ANALYTICS_TOKEN }}
         run: npm run build
+      - name: Verify production vision model cache
+        working-directory: web_mujoco
+        env:
+          GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/
+        run: npm run benchmark:yolo-cache
+      - name: Upload vision cache benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yolo-cache-benchmark
+          path: web_mujoco/.reports/yolo-cache-benchmark.json
+          if-no-files-found: ignore
+          include-hidden-files: true
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

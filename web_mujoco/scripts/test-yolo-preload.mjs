@@ -29,7 +29,7 @@ try {
       const errors = [];
       let requests = 0;
       page.on('pageerror', error => errors.push(error.message));
-      await page.route('**/yolo/objects.onnx', async route => {
+      await page.route('**/yolo/objects.onnx*', async route => {
         requests++;
         if (requests === 1) {
           if (scenario === 'retry-after-failure') return route.abort('failed');

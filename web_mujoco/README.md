@@ -220,6 +220,14 @@ workflow 自动使用当前仓库名设置 `GITHUB_PAGES_BASE`，Vite 据此生�
 Sync fork 只同步代码，不会同步仓库名称或 Pages 设置；无需购买域名或设置 Custom domain。
 
 
+标准机械臂页面加载完成后会在后台准备 YOLO 视觉模型。生产页面会按模型文件内容版本
+将成功初始化的模型保存到浏览器缓存，后续访问可直接复用；模型更新后会下载新版本。
+浏览器可能清理缓存；模型字节按内容版本校验，缓存不可用或内容损坏时会回退网络并重试，失败不会影响普通抓取。
+`window.rebotYoloStartupMetrics()` 可读取最近一次模型来源、读取、校验、初始化和缓存写入耗时；
+其中 network 表示未命中专用模型缓存，仍可能由浏览器普通 HTTP 缓存响应。
+执行 `npm run build` 后可运行 `npm run benchmark:yolo-cache`，使用生产预览对照首次与再次加载，
+输出 `.reports/yolo-cache-benchmark.json`；加 `-- --hardware` 可使用本机 GPU 渲染。
+
 首次打开会下载所选场景的全部网格，请用 Chrome 或 Edge。
 XML 和网格下载在连接或连续 8 秒没有新数据时终止当前请求；网络错误、超时及
 HTTP 408 / 429 / 5xx 最多重试一次，404 等永久错误直接进入下一种资源回退。

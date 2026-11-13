@@ -31,6 +31,8 @@ function hashModelFiles() {
 }
 
 const modelVersions = hashModelFiles();
+const yoloPath = path.resolve(root, 'public/yolo/objects.onnx');
+const yoloVersion = existsSync(yoloPath) ? createHash('sha256').update(readFileSync(yoloPath)).digest('hex').slice(0, 16) : 'missing';
 const packedMeshFiles = Object.fromEntries(Object.keys(modelVersions).filter(name=>{
   if(!/\.stl$/i.test(name))return false;
   const bytes=readFileSync(path.join(modelsSrcAbs,name));
@@ -87,7 +89,8 @@ export default defineConfig(({ command, mode }) => ({
   define: {
     __MODEL_VERSIONS__: JSON.stringify(modelVersions),
     __PACKED_MESH_FILES__: JSON.stringify(packedMeshFiles),
-    __MUJOCO_VERSION__: JSON.stringify(mujocoVersion)
+    __MUJOCO_VERSION__: JSON.stringify(mujocoVersion),
+    __YOLO_MODEL_VERSION__: JSON.stringify(yoloVersion)
   },
   optimizeDeps: {
     exclude: ['@mujoco/mujoco']

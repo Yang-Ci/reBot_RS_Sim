@@ -9,7 +9,7 @@ import { createTcpDrag } from './tcp-drag.js';
 import { createPartExplorer } from './part-explorer.js';
 import { createGraspDemo } from './grasp-demo.js';
 import { observeYoloGrasp } from './yolo-grasp.js';
-import { initializeYolo, isYoloReady } from './yolo-browser-runtime.js';
+import { initializeYolo, isYoloReady, yoloStartupMetrics } from './yolo-browser-runtime.js';
 import { MAX_GRASP_FRAME_AGE_MS } from './grasp-reobservation.js';
 import { createContactTelemetry } from './contact-telemetry.js';
 import { createTelemetryPanel } from './telemetry-panel.js';
@@ -242,6 +242,9 @@ function finishLoading() {
   });
   void persistAppShell();
 }
+
+// Read-only timing diagnostics for comparing cold and repeat visits.
+window.rebotYoloStartupMetrics = yoloStartupMetrics;
 
 function preloadVisionModel() {
   if (!yoloEnabled) return;

@@ -35,7 +35,9 @@
     "test:surfaces": "node scripts/test-lab-surfaces.mjs && node scripts/test-campus-ground.mjs",
     "test:explode": "node scripts/test-explosion-layout.mjs && node scripts/test-explosion-timeline.mjs",
     "test:yolo-browser": "node scripts/test-yolo-browser.mjs",
-    "test:yolo-preload": "node scripts/test-yolo-preload.mjs"
+    "test:yolo-preload": "node scripts/test-yolo-preload.mjs",
+    "test:yolo-cache": "node scripts/test-yolo-model-cache.mjs",
+    "benchmark:yolo-cache": "node scripts/benchmark-yolo-cache.mjs"
   },
   "dependencies": {
     "@mujoco/mujoco": "^3.12.0",

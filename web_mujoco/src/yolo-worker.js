@@ -1,3 +1,4 @@
+import {createCachedYoloSession} from './yolo-model-cache.js';
 import * as ort from 'onnxruntime-web/wasm';
 import ortModuleUrl from '../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs?url';
 import ortWasmUrl from '../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm?url';
@@ -9,7 +10,10 @@ function session() {
   if (!sessionPromise) {
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.wasmPaths = { mjs: ortModuleUrl, wasm: ortWasmUrl };
-    sessionPromise = ort.InferenceSession.create(`${import.meta.env.BASE_URL}yolo/objects.onnx`, { executionProviders: ['wasm'] });
+    const version = typeof __YOLO_MODEL_VERSION__ === 'undefined' ? 'dev' : __YOLO_MODEL_VERSION__;
+    const url = new URL(`${import.meta.env.BASE_URL}yolo/objects.onnx?v=${version}`, self.location.origin).href;
+    sessionPromise = createCachedYoloSession(url, bytes =>
+      ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] }), {persistent: import.meta.env.PROD});
   }
   return sessionPromise;
 }
@@ -47,7 +51,7 @@ function decodeMask(candidate, predictions, prototypes) {
 }
 
 async function detect(pixels, target, minConfidence) {
-  const model = await session();
+  const { model } = await session();
   const rgb = new Float32Array(3 * SIZE * SIZE);
   rgb.fill(114 / 255);
   for (let y = 0; y < 480; y++) for (let x = 0; x < SIZE; x++) {
@@ -85,8 +89,8 @@ async function detect(pixels, target, minConfidence) {
 }
 self.onmessage = async ({ data }) => {
   try {
-    if (data.type === 'init') await session();
-    const result = data.type === 'detect' ? await detect(data.pixels, data.target, data.minConfidence) : undefined;
+    const result = data.type === 'init' ? (await session()).metrics :
+      data.type === 'detect' ? await detect(data.pixels, data.target, data.minConfidence) : undefined;
     self.postMessage({ id: data.id, result });
   } catch (error) { self.postMessage({ id: data.id, error: error?.message || String(error) }); }
 };
