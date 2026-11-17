@@ -63,6 +63,11 @@ try {
       assert(stages.has('correcting-approach'));
       assert(Math.abs(state.objectStart.x - first.position.x - .01) < .001);
       assert.equal(state.stage, 'complete', `${state.stage}: ${state.message}`);
+      assert(stages.has('returning'), 'Successful visual grasp must return to standby before completion');
+      for (const [name, expected] of Object.entries({ joint1: 0, joint2: .65, joint3: .45, joint4: .55, joint5: 0, joint6: 0 })) {
+        assert(Math.abs(data.qpos[joints.byName[name].qposadr] - expected) < .055,
+          `${name} must reach the centered standby pose`);
+      }
     } else if (scenario === 'cancel') assert.equal(state.stage, 'idle');
     else {
       assert.equal(state.stage, 'failed');

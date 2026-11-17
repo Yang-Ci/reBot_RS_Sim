@@ -1,6 +1,7 @@
 import { ARM_JOINTS, homePose } from './kinematics.js';
 import { graspOrientation, planGraspDescent, planGraspPlacement } from './grasp-descent.js';
 import { MAX_GRASP_FRAME_AGE_MS, validateGraspReobservation } from './grasp-reobservation.js';
+import { motionBlend } from './motion-safety.js';
 
 export const VISION_TARGETS = [
   { id: 'red', body: 'red_cube', labelKey: 'vision.red', color: '#ef5260', graspYawPeriod: Math.PI / 2 },
@@ -38,6 +39,15 @@ const STACK_READY_POSE = {
   joint5: 0.0471,
   joint6: 0
 };
+const GRASP_REST_POSE = {
+  joint1: 0,
+  joint2: 0.65,
+  joint3: 0.45,
+  joint4: 0.55,
+  joint5: 0,
+  joint6: 0
+};
+const REST_JOINT_SPEED = 1.6;
 const PREGRASP_PREPARE_TIMEOUT = 2.4;
 const PREGRASP_ALIGN_TIMEOUT = 2.2;
 const PREGRASP_JOINT_TOLERANCE = 0.055;
@@ -80,6 +90,7 @@ const STAGE_PROGRESS = {
   retreat: 0.97,
   depart: 0.985,
   settling: 0.99,
+  returning: 0.995,
   'celebrate-centering': 0.992,
   celebrate: 0.996,
   'shy-centering': 0.992,
@@ -153,6 +164,7 @@ export function createGraspDemo({
   let alignmentJoint1 = null;
   let graspPlan = null;
   let placementPlan = null;
+  let returnMotion = null;
   let lastError = 0;
   let message = '';
 
@@ -268,6 +280,7 @@ export function createGraspDemo({
     carryOffset = null;
     graspPlan = null;
     placementPlan = null;
+    returnMotion = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];
@@ -333,6 +346,7 @@ export function createGraspDemo({
     carryOffset = null;
     graspPlan = null;
     placementPlan = null;
+    returnMotion = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];
@@ -572,9 +586,10 @@ export function createGraspDemo({
     } else {
       if (mode === 'stack') startReaction('happy');
       else {
-        running = false;
-        message = 'complete';
-        enter('complete');
+        const from = currentArmPose();
+        const travel = Math.max(...ARM_JOINTS.map(({ name }) => Math.abs(GRASP_REST_POSE[name] - from[name])));
+        returnMotion = { from, duration: Math.max(1.2, 1.875 * travel / REST_JOINT_SPEED) };
+        enter('returning');
       }
     }
   }
@@ -762,6 +777,16 @@ export function createGraspDemo({
         (elapsed >= TOWER_SETTLE_TIME && selectedLinearSpeed() < MAX_PLACEMENT_SPEED * 0.5) ||
         elapsed > 1.2
       ) finishPlacement();
+    } else if (stage === 'returning') {
+      const fraction = motionBlend(Math.min(1, elapsed / returnMotion.duration));
+      physics.setTargets(Object.fromEntries(ARM_JOINTS.map(({ name }) => [name,
+        returnMotion.from[name] + (GRASP_REST_POSE[name] - returnMotion.from[name]) * fraction
+      ])));
+      if (elapsed >= returnMotion.duration && armPoseReached(GRASP_REST_POSE)) {
+        running = false;
+        message = 'complete';
+        enter('complete');
+      } else if (elapsed > returnMotion.duration + MOVE_TIMEOUT) fail('return-timeout');
     } else if (
       stage === 'celebrate-centering' ||
       stage === 'celebrate' ||
@@ -790,6 +815,7 @@ export function createGraspDemo({
     carryOffset = null;
     graspPlan = null;
     placementPlan = null;
+    returnMotion = null;
     supportContactSince = null;
     reaction = null;
     reactionSequence = [];

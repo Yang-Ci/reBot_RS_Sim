@@ -75,7 +75,7 @@ document.body.innerHTML = `
   </main>`;
 
 const $ = (id) => document.getElementById(id);
-const stages = { idle: '待命', preparing: '准备', aligning: '对准物体', opening: '张开夹爪', approach: '靠近物体', descend: '下降抓取', closing: '夹紧物体', lift: '抬起物体', transfer: '搬运中', place: '放置物体', release: '松开夹爪', retreat: '抬臂避让', settling: '确认放稳', complete: '已完成', failed: '未完成' };
+const stages = { idle: '待命', preparing: '准备', aligning: '对准物体', opening: '张开夹爪', approach: '靠近物体', descend: '下降抓取', closing: '夹紧物体', lift: '抬起物体', transfer: '搬运中', place: '放置物体', release: '松开夹爪', retreat: '抬臂避让', settling: '确认放稳', returning: '回到中间待机位', complete: '已完成', failed: '未完成' };
 let simulation = null;
 let frameId = 0;
 let view = null;
