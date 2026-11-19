@@ -10,6 +10,8 @@ export const MODEL_VARIANTS = Object.freeze({
       environment: 'home',
       position: [1.8, 1.25, 1.95],
       target: [0.24, 0, 0.83],
+      // Stay on the table side of the floor lamp in front of the side wall.
+      maxCameraY: 1.60,
       // Z-up orbit: include the right side of the table so the coffee machine
       // stays clear of the arms. Keep the camera in front of the back wall.
       orbit: Object.freeze({

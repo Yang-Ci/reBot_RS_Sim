@@ -493,14 +493,21 @@ export function createSceneView(host, options = {}) {
     controls.maxDistance = 55;
   }
   if (options.orbit) Object.assign(controls, options.orbit);
-  controls.update();
+  const maxCameraY = options.maxCameraY ?? Infinity;
   function onCameraChange() {
+    // Limit the distance along the current orbit ray so the side wall cannot
+    // sit between the camera and the workspace. Preserve the viewing angle.
+    if (camera.position.y > maxCameraY) {
+      const excess = camera.position.y - maxCameraY;
+      camera.position.lerp(controls.target, excess / (camera.position.y - controls.target.y));
+    }
     // Wheel/touch dolly calls OrbitControls.update() inside the input event.
     // The next animation-frame update can therefore return false even though
     // the displayed frame is stale. Invalidate on the control's change event.
     homeFrameDirty = true;
   }
   controls.addEventListener('change', onCameraChange);
+  controls.update();
 
   const pmrem = new THREE.PMREMGenerator(renderer);
   const environmentSource = home ? createHomeEnvironmentTexture() : createEnvironmentTexture();

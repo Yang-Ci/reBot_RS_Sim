@@ -63,18 +63,21 @@ document.body.innerHTML = `
         <select id="dual-task-select"><option value="cooperation">左臂拿稳杯子，右臂把勺子放进杯中</option></select>
         <label class="dual-sr" for="dual-speed">演示速度</label>
         <select id="dual-speed" aria-label="演示速度"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select>
-        <button id="dual-pause" disabled aria-label="暂停演示">Ⅱ</button>
         <button id="dual-start" disabled>开始协作 <span>↗</span></button>
       </div>
       </div>
       <div class="dual-progress"><div id="dual-progress-fill"></div></div>
-      <p id="dual-status" role="status" aria-live="polite">正在准备双臂场景…</p>
+      <div class="dual-task-summary">
+        <p id="dual-status" role="status" aria-live="polite">正在准备双臂场景…</p>
+        <button id="dual-pause" hidden disabled aria-label="暂停演示">Ⅱ</button>
+      </div>
     </section>
     <footer class="dual-footer"><span>拖动调整视角 · 滚轮缩放</span><span>SPACE 暂停 <span class="dual-footer-separator">/</span> R 复位</span></footer>
     <div class="dual-loading" id="dual-loading" role="status"><div class="dual-spinner"></div><strong>正在布置工作空间</strong><p id="dual-loading-text">加载 MuJoCo 与机械臂模型…</p></div>
   </main>`;
 
 const $ = (id) => document.getElementById(id);
+const taskDock = document.querySelector('.dual-dock');
 const stages = { idle: '待命', preparing: '准备', aligning: '对准物体', opening: '张开夹爪', approach: '靠近物体', descend: '下降抓取', closing: '夹紧物体', lift: '抬起物体', transfer: '搬运中', place: '放置物体', release: '松开夹爪', retreat: '抬臂避让', settling: '确认放稳', returning: '回到中间待机位', complete: '已完成', failed: '未完成' };
 let simulation = null;
 let frameId = 0;
@@ -84,6 +87,7 @@ let selected = 'all';
 let taskMode = 'cooperation';
 let cooperativeTask='spoon-in-cup';
 let planning = false;
+let dockCollapsed = false;
 let nextLayoutSeed = 1;
 let simulationClock = null;
 
@@ -115,21 +119,40 @@ function renderTaskMode() {
 renderTaskMode();
 
 $('dual-variant').addEventListener('change', (event) => switchModelVariant(event.target.value));
-$('dual-dock-toggle').addEventListener('click', () => {
-  const collapsed = !$('dual-task-details').hidden;
+function renderTaskDock(active) {
+  const collapsed = active || dockCollapsed;
+  const toggle = $('dual-dock-toggle');
   $('dual-task-details').hidden = collapsed;
-  document.querySelector('.dual-dock').classList.toggle('is-collapsed', collapsed);
-  $('dual-dock-toggle').setAttribute('aria-expanded', String(!collapsed));
-  $('dual-dock-toggle').setAttribute('aria-label', collapsed ? '展开任务卡片' : '收起任务卡片');
-  $('dual-dock-toggle').title = collapsed ? '展开任务卡片' : '收起任务卡片';
-  $('dual-dock-toggle').querySelector('span').textContent = collapsed ? '展开' : '收起';
+  taskDock.classList.toggle('is-collapsed', collapsed);
+  taskDock.classList.toggle('is-active', active);
+  toggle.hidden = active;
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  toggle.title = collapsed ? '展开任务卡片' : '收起任务卡片';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.querySelector('span').textContent = collapsed ? '展开' : '收起';
+}
+
+$('dual-dock-toggle').addEventListener('click', () => {
+  dockCollapsed = !dockCollapsed;
+  renderTaskDock(false);
 });
+
+function sortingStatus(arms) {
+  const steps = [];
+  for (const [side, arm] of Object.entries(arms)) {
+    if (!arm.running) continue;
+    const task = TABLETOP_TASKS.find(({ id }) => id === arm.selectedId);
+    steps.push(`${side === 'left' ? '左臂' : '右臂'} · ${task.label} · ${stages[arm.stage]}`);
+  }
+  return steps.join(' ｜ ') || '准备整理…';
+}
 
 function renderState() {
   if (!simulation) return;
   const state = simulation.state();
   const coop = taskMode === 'cooperation';
   const collaboration = state.cooperation;
+  renderTaskDock(planning || state.running);
   const coffee = cooperativeTask === 'coffee-feeding';
   const phases = coffee ? COFFEE_PHASES : COOP_PHASES;
   const count = state.completed.length;
@@ -141,6 +164,7 @@ function renderState() {
   for (const [index, side] of ['left', 'right'].entries()) $('dual-' + side + '-state').textContent = state.paused ? '已暂停' : coop ? roles[collaboration.phase]?.[index] || '待命' : stages[state.arms[side].stage] || '待命';
   $('dual-mode-coop').disabled = $('dual-mode-sort').disabled = state.running || planning;
   $('dual-reset').disabled = planning;
+  $('dual-pause').hidden = !state.running;
   $('dual-pause').disabled = !state.running;
   $('dual-pause').textContent = state.paused ? '▶' : 'Ⅱ';
   $('dual-pause').setAttribute('aria-label', state.paused ? '继续演示' : '暂停演示');
@@ -175,13 +199,15 @@ function renderState() {
     const reason = reasons[state.error] || (state.error.startsWith('motion-timeout:') ? '动作未在规定时间内完成' : '未满足抓取条件');
     $('dual-status').textContent = coop ? `${phase}：${reason}。${coffee ? '请复位后重试。' : '可重试当前摆放或换一组。'}` : '本次抓取未完成，请复位后重试。';
   }
-  else if (state.paused) $('dual-status').textContent = '演示已暂停，点击继续或按空格键恢复。';
-  else if (coop && state.running) $('dual-status').textContent = collaboration.label;
+  else if (state.running) {
+    const step = coop ? collaboration.label : sortingStatus(state.arms);
+    const status = state.paused ? `已暂停 · ${step}` : step;
+    if ($('dual-status').textContent !== status) $('dual-status').textContent = status;
+  }
   else if (coop && coffee && collaboration.complete) $('dual-status').textContent = '接咖啡、搅拌和送勺完成，杯内保留咖啡，餐勺已放回。';
   else if (coop && coffee) $('dual-status').textContent = '左臂接咖啡并持稳杯子，右臂搅拌后送勺到嘴边。点击开始协作。';
   else if (coop && collaboration.complete) $('dual-status').textContent = cooperativeTask==='present-and-return'?'视觉复核通过：杯子和餐勺已分别归位，双臂均已松开。':'视觉复核通过：餐勺已入杯，杯子已放稳，双臂均已松开。';
   else if (coop) $('dual-status').textContent = cooperativeTask==='present-and-return'?'双臂取杯取勺，会合展示后送回各自的原位。点击开始协作。':'左臂拿稳杯子，右臂把勺子放进杯中。点击开始协作。';
-  else if (state.running) $('dual-status').textContent = '整理进行中 · 左臂收纳到托盘，右臂收纳到篮子。';
   else if (count === 4) $('dual-status').textContent = '桌面整理完成。点击复位，可以再来一次。';
   else if (count) $('dual-status').textContent = '物品已放好，可以继续整理剩余物品。';
   else $('dual-status').textContent = '点击开始，让双臂一起整理；也可以点选一件物品。';

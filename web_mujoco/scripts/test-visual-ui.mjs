@@ -46,6 +46,7 @@ try {
       assert(value>=min-1e-6&&value<=max+1e-6,JSON.stringify(camera));
     }
     assert(camera.position[0]>camera.target[0]&&camera.position[2]>camera.target[2]);
+    assert(camera.position[1] <= MODEL_VARIANTS.dual.view.maxCameraY + 1e-6, 'Camera must stay inside the side wall');
   }
   const initialCamera=await cameraState();checkBounds(initialCamera);
   assert(initialCamera.azimuth>Math.PI*105/180,'the initial view must be on the clear side of the coffee machine, beyond the former right limit');
@@ -82,12 +83,30 @@ try {
     for(const key of modifiers)await page.keyboard.up(key);
     assert.deepEqual((await cameraState()).target,anchored.target);
   }
+  await page.locator('#dual-room').click();
   await page.mouse.move(pointer.x,pointer.y);
   for(const [delta,distance] of [[10000,orbit.maxDistance],[-10000,orbit.minDistance]]) {
     await page.mouse.wheel(0,delta);
     await page.waitForFunction(({distance})=>Math.abs(window.rebotDual.renderMetrics().camera.distance-distance)<1e-6,{distance});
     checkBounds(await cameraState());
   }
+  // A wide shot can cross the wall when orbiting toward it at full zoom out.
+  await page.locator('#dual-room').click();
+  await page.mouse.move(pointer.x,pointer.y);
+  await page.mouse.wheel(0,10000);
+  await page.waitForFunction(max => Math.abs(window.rebotDual.renderMetrics().camera.distance - max) < 1e-6,orbit.maxDistance);
+  await page.mouse.down();
+  await page.mouse.move(pointer.x-1800,pointer.y,{steps:12});
+  await page.mouse.up();
+  await page.waitForFunction(max => Math.abs(window.rebotDual.renderMetrics().camera.azimuth - max) < 1e-6,orbit.maxAzimuthAngle);
+  const wallView = await cameraState();
+  checkBounds(wallView);
+  assert(Math.abs(wallView.position[1] - MODEL_VARIANTS.dual.view.maxCameraY) < 1e-6);
+  assert(wallView.distance < orbit.maxDistance);
+  await page.mouse.move(pointer.x,pointer.y);
+  await page.mouse.wheel(0,10000);
+  checkBounds(await cameraState());
+  await page.screenshot({path:'.reports/visual-ui-wall-limit.png'});
   await page.locator('#dual-perspective').click();
   const cdp=await page.context().newCDPSession(page);
   const touch=(type,points)=>cdp.send('Input.dispatchTouchEvent',{type,touchPoints:points.map(([x,y],id)=>({x,y,id}))});
@@ -109,16 +128,24 @@ try {
   await page.waitForFunction(()=>{const s=window.rebotDual.state();return Boolean(s.error)||!s.cooperation.vision.waiting&&s.cooperation.phase==='approach';},null,{timeout:observationTimeout});
   const started=await page.evaluate(()=>window.rebotDual.state());
   assert.equal(started.error,'',JSON.stringify(started.cooperation.failure));
+  await page.locator('#dual-task-details').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#dual-dock-toggle').isVisible(),false);
+  assert.equal(await page.locator('#dual-pause').isVisible(),true);
+  assert.equal(await page.locator('#dual-status').isVisible(),true);
+  await page.screenshot({path:'.reports/visual-ui-active-task.png'});
   assert.equal(await page.locator('#dual-perspective').getAttribute('aria-pressed'),'true');
   checkCameraUnchanged(await cameraState(),cameraBeforeStart);
   await page.locator('#dual-pause').click({force:true});
   console.log('UI: task started and paused');
   const paused=await page.evaluate(()=>window.rebotDual.state().time);await page.waitForTimeout(600);
   assert.equal(await page.evaluate(()=>window.rebotDual.state().time),paused);checks.pause=true;
+  assert.match(await page.locator('#dual-status').textContent(),/^已暂停 · /);
+  assert.equal(await page.locator('#dual-task-details').isVisible(),false);
   await page.locator('#dual-pause').click({force:true});
   await page.waitForFunction(()=>{const s=window.rebotDual.state();return s.cooperation.complete||Boolean(s.error);},null,{timeout:taskTimeout});
   const final=await page.evaluate(()=>window.rebotDual.state());
   assert.equal(final.error,'',JSON.stringify(final.cooperation.failure));assert.equal(final.cooperation.complete,true);
+  await page.locator('#dual-task-details').waitFor({state:'visible'});
   assert.equal(final.cooperation.controlMode,'visual-rgbd');assert(final.cooperation.vision.history.some(h=>h.stage==='settled-verification'));
   checks.final=final;checks.camerasAfter=await cameraPixels();
   assert.equal(final.cooperation.graspMode,'contact-only');
@@ -164,6 +191,12 @@ try {
   assert.equal(await page.evaluate(()=>window.rebotDual.state().cooperation.coffeeFill || 0),0);
   await page.locator('#dual-task-select').selectOption('spoon-in-cup');
   await page.locator('#dual-mode-sort').click();assert.equal(await page.locator('#dual-grasp-mode').textContent(),'接触物理抓取');
+  await page.locator('#dual-task-select').selectOption('egg');
+  await page.locator('#dual-start').click({force:true});
+  assert.equal(await page.locator('#dual-task-details').isVisible(),false);
+  assert.match(await page.locator('#dual-status').textContent(),/左臂 · 鸡蛋 · .+/);
+  await page.locator('#dual-reset').click();
+  assert.equal(await page.locator('#dual-task-details').isVisible(),true);
   await page.locator('#dual-mode-coop').click();assert.match(await page.locator('#dual-grasp-mode').textContent(),/RGB-D/);checks.modeSwitch=true;
   assert.deepEqual(errors,[]);checks.errors=errors;
   console.log('Actual UI: two pure-contact Worker RGB-D tasks, assisted coffee/feeding task, three independent cameras, pause, fold, mobile, reset and mode switching passed');
