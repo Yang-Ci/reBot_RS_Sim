@@ -23,6 +23,9 @@ class SliderSpec:
     unit: str
 
 
+_VISUAL_OPEN_M = 0.05
+
+
 SLIDERS = [
     SliderSpec("joint1", "joint1 / base rotation", -2.8, 2.8, 0.0, 0.001, "rad"),
     SliderSpec("joint2", "joint2 / shoulder pitch", -0.2, 3.14, 0.0, 0.001, "rad"),
@@ -30,15 +33,14 @@ SLIDERS = [
     SliderSpec("joint4", "joint4 / wrist roll", -1.57, 1.57, 0.0, 0.001, "rad"),
     SliderSpec("joint5", "joint5 / wrist pitch", -1.57, 1.57, 0.0, 0.001, "rad"),
     SliderSpec("joint6", "joint6 / wrist yaw", -3.14, 3.14, 0.0, 0.001, "rad"),
-    SliderSpec("gripper_joint1", "gripper open/close", 0.0, 0.045, 0.0, 0.0005, "m"),
+    SliderSpec("gripper_joint1", "gripper open/close", 0.0, _VISUAL_OPEN_M, 0.0, 0.0005, "m"),
 ]
 
-_ARM_SLIDERS = [s for s in SLIDERS if s.name.startswith("joint")]
+_ARM__VISUAL_OPEN_M = 0.05
+
+
+SLIDERS = [s for s in SLIDERS if s.name.startswith("joint")]
 _GRIPPER_SLIDER = SLIDERS[-1]
-
-# visual-to-raw conversion for the fake driver's gripper command
-_VISUAL_OPEN_M = 0.045
-
 
 class JointSliderGui(Node):
     def __init__(self) -> None:
@@ -191,7 +193,7 @@ class JointSliderGui(Node):
         ttk.Button(controls, text="Grip Half", command=lambda: self.set_gripper(0.0225)).grid(
             row=0, column=2, padx=8
         )
-        ttk.Button(controls, text="Grip Open", command=lambda: self.set_gripper(0.045)).grid(
+        ttk.Button(controls, text="Grip Open", command=lambda: self.set_gripper(_VISUAL_OPEN_M)).grid(
             row=0, column=3, padx=8
         )
         ttk.Button(controls, text="Send Once", command=self._publish_once).grid(

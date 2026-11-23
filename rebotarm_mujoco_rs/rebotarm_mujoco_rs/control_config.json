@@ -8,6 +8,6 @@
     "ros": {"kp":1800,"kd":18,"tauLimit":64},
     "cooperation": {"kp":1800,"kd":18,"tauLimit":12,"closingRate":0.04,"openingRate":0.08,"preload":2,"maxPreload":4,"preloadRampSeconds":0.5,"preloadWidth":0.006}
   },
-  "gripper": {"simulationOpen":0.05,"rosVisualOpen":0.045,"motorOpenRad":5},
+  "gripper": {"simulationOpen":0.05,"rosVisualOpen":0.05,"motorOpenRad":5},
   "cooperation": {"maxVelocity":0.8,"maxAcceleration":2,"pathSampleRadians":0.025}
 }
