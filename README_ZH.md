@@ -153,6 +153,8 @@ ros2 launch rebotarm_mujoco_rs joint_slider_gui.launch.py
 
 ## 模型与 CAD 维护
 
+当前 RS URDF 使用实测质量和质心。模型总质量为 6.5503 kg，每侧夹爪手指为 55.9 g，滑动行程各为 0–50 mm。 [URDF 源文件](RS/urdf/ReBot_Arm_RS.urdf)
+
 | 资源 | 用途 |
 | --- | --- |
 | [`rs_arm.xml`](rebotarm_mujoco_rs/models/rs_arm.xml) | RS 机械臂、夹爪、腕部相机和碰撞模型 |

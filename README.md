@@ -149,6 +149,8 @@ See the [MuJoCo package documentation](rebotarm_mujoco_rs/README.md) and [labora
 
 ## Model and CAD Maintenance
 
+The current RS URDF uses measured masses and centers of mass. The model totals 6.5503 kg. Each gripper finger weighs 55.9 g and has 0–50 mm of travel. [URDF source](RS/urdf/ReBot_Arm_RS.urdf)
+
 | Resource | Purpose |
 | --- | --- |
 | [`rs_arm.xml`](rebotarm_mujoco_rs/models/rs_arm.xml) | RS arm, gripper, wrist camera, and collision model |
